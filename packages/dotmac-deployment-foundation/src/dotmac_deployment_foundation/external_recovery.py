@@ -94,6 +94,17 @@ from .spec import BackupDataset, ProductDeploymentSpec
 
 EXTERNAL_RECEIPT_SCHEMA: Final = "RecoveryReceipt.v1"
 
+#: The `BackupRecord.path` prefix every caller of :func:`backup_record_from_receipt`
+#: uses for the record it builds from an external recovery receipt (see
+#: `engine/run.py`'s
+#: ``path=f"{EXTERNAL_BACKUP_PATH_PREFIX}{receipt.executor.identifier}"``).
+#: `backup_record_from_receipt` takes `path`/`size_bytes` from its caller rather
+#: than constructing them, so this module does not enforce the convention
+#: itself — it names it, as the ONE place both this module's callers and any
+#: reader of a `BackupRecord` (see `transition_receipt.py`'s use of this
+#: constant to detect such a record) agree on what "external" looks like.
+EXTERNAL_BACKUP_PATH_PREFIX: Final = "external:"
+
 #: Stands in for the key id a signed document deliberately does not carry.
 #: Machine-shaped so `ExternalExecutorV1` accepts it, and obviously not a
 #: key so nobody mistakes it for one.
@@ -124,6 +135,7 @@ VERIFICATION_EVIDENCE: Final[dict[str, str]] = {
 
 __all__ = [
     "EXECUTOR_KINDS",
+    "EXTERNAL_BACKUP_PATH_PREFIX",
     "EXTERNAL_RECEIPT_SCHEMA",
     "PRIVILEGE_VERIFICATIONS",
     "VERIFICATION_EVIDENCE",

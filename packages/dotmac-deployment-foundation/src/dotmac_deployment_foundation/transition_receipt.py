@@ -164,6 +164,7 @@ from typing import Any, Final
 from .backup import ArtefactClass, Assurance, BackupRecord
 from .digest import Digest
 from .errors import SpecError
+from .external_recovery import EXTERNAL_BACKUP_PATH_PREFIX
 from .secrets_guard import require_no_secrets
 
 __all__ = [
@@ -188,6 +189,14 @@ _REVISION = re.compile(r"^[0-9a-f]{40}$")
 #: lowercase hex characters, exactly. See the module docstring's "Parsing
 #: accepts canonical input only" for why this refuses rather than normalizes.
 _CANONICAL_DIGEST = re.compile(r"^sha256:[0-9a-f]{64}$")
+
+#: Mirrors `spec.BackupDataset.CHECKSUMS` (spec.py:1449). Not imported from
+#: there: this module deliberately never imports `spec.py` (see the module
+#: docstring's "Why `spec` is untyped here") to avoid coupling to a concrete
+#: `ProductDeploymentSpec` type the same way `recovery.restore_plan` avoids
+#: it. Kept in sync by hand — if the allowed set changes in one place, it
+#: must change in the other.
+_ALLOWED_CHECKSUM_ALGORITHMS: Final[tuple[str, ...]] = ("sha256", "sha512")
 
 
 # ── small strict-parsing helpers, mirroring transition.py's own ────────────
@@ -253,20 +262,20 @@ def _validated_heads(heads: object, *, where: str) -> tuple[str, ...]:
     character (the classic gotcha of ``tuple(str(item) for item in "abc")``),
     and every element must already be a ``str`` — this constructs from
     already-typed data, so a non-string element is a caller bug, not a value
-    to coerce.
+    to coerce. Each element is held to the same ``_required`` standard as
+    every other string field on this receipt: no leading/trailing whitespace,
+    not empty — a padded or empty "head" is not a real migration head and
+    must be refused rather than silently accepted as a distinct value.
     """
-    if isinstance(heads, (str, bytes)):
+    if isinstance(heads, str | bytes):
         raise SpecError(
             f"{where} must be a list of strings, not a bare {type(heads).__name__}"
         )
     if not isinstance(heads, Sequence):
         raise SpecError(f"{where} must be a list of strings")
-    values: tuple[str, ...] = tuple(heads)
-    for item in values:
-        if not isinstance(item, str):
-            raise SpecError(
-                f"{where}: migration head must be a string, got {type(item).__name__}"
-            )
+    values: tuple[str, ...] = tuple(
+        _required(item, where=f"{where}[]") for item in heads
+    )
     seen: set[str] = set()
     for value in values:
         if value in seen:
@@ -426,7 +435,18 @@ class TransitionBackup:
     :class:`~.backup.BackupRecord` carries no id field of its own, so
     ``bundle_id`` is defined to be exactly the recorded artefact
     ``BackupRecord.path`` — the one field that already uniquely names which
-    backup a record describes.
+    backup a record describes, PROVIDED that path locates a real, locally
+    written artefact. A record built by
+    :func:`~.external_recovery.backup_record_from_receipt` does not: its
+    caller writes ``path=f"{EXTERNAL_BACKUP_PATH_PREFIX}{executor identifier}"``
+    (see `engine/run.py`) and ``size_bytes=max(1, restore_duration_seconds)``
+    — a stand-in identifying WHICH EXECUTOR ran, and a byte count that is
+    actually a duration in seconds, not a real artefact id and size. This
+    module refuses such a record (``BACKUP_RECORD_NOT_ARTEFACT_BOUND``) rather
+    than let ``bundle_id``/``size_bytes`` agreement on those stand-in values
+    be read as agreement on the backup itself. Verifying a transition whose
+    backup was externally proved is a tracked follow-up, not silently
+    accepted here.
     """
 
     bundle_digest: str
@@ -643,7 +663,9 @@ class TransitionFinding(str, Enum):
     BACKUP_ASSURANCE_TOO_LOW = "backup_assurance_too_low"
     BACKUP_ID_MISMATCH = "backup_id_mismatch"
     BACKUP_DIGEST_MISMATCH = "backup_digest_mismatch"
+    BACKUP_ALGORITHM_UNSUPPORTED = "backup_algorithm_unsupported"
     BACKUP_SIZE_MISMATCH = "backup_size_mismatch"
+    BACKUP_RECORD_NOT_ARTEFACT_BOUND = "backup_record_not_artefact_bound"
     PRODUCT_MISMATCH = "product_mismatch"
     INPUT_NOT_CANONICALIZABLE = "input_not_canonicalizable"
 
@@ -716,7 +738,14 @@ def _check_chain(
             findings.append(TransitionFinding.GENESIS_SOURCE_MISMATCH)
         return findings
 
-    assert previous_receipt is not None  # narrowed by the xor check above
+    if previous_receipt is None:
+        # Unreachable: the xor check above guarantees exactly one of
+        # `previous_receipt`/`genesis_source` is set, and `genesis_source`
+        # being set was just ruled out above by the `if genesis_source is not
+        # None` branch returning. Stated as a real, named branch rather than
+        # an `assert` (no asserts in src) so this stays a finding, never a
+        # crash, even if that invariant is ever broken by a future edit.
+        return [TransitionFinding.CHAIN_ANCHOR_AMBIGUOUS]
     if receipt.previous_receipt_digest is None:
         return [TransitionFinding.CHAIN_PREVIOUS_MISSING]
     findings = []
@@ -737,10 +766,18 @@ def _check_chain(
 
 
 def _check_target_heads(
-    receipt: TransitionReceiptV1, spec: Any, observed_target_heads: Sequence[str]
+    receipt: TransitionReceiptV1, spec: Any, observed_target_heads: object
 ) -> list[TransitionFinding]:
+    if isinstance(observed_target_heads, str | bytes) or not isinstance(
+        observed_target_heads, Sequence
+    ):
+        return [TransitionFinding.INPUT_NOT_CANONICALIZABLE]
+    observed_list: list[str] = []
+    for head in observed_target_heads:
+        if not isinstance(head, str) or not head:
+            return [TransitionFinding.INPUT_NOT_CANONICALIZABLE]
+        observed_list.append(head)
     findings: list[TransitionFinding] = []
-    observed_list = [str(head) for head in observed_target_heads]
     if len(set(observed_list)) != len(observed_list):
         findings.append(TransitionFinding.TARGET_HEADS_DUPLICATE)
     declared = set(receipt.target_side.migration_heads)
@@ -800,8 +837,15 @@ def _check_backup(
         or backup_record.checksum_algorithm != receipt.backup.checksum_algorithm
     ):
         findings.append(TransitionFinding.BACKUP_DIGEST_MISMATCH)
-    if int(backup_record.size_bytes) != int(receipt.backup.size_bytes):
+    if receipt.backup.checksum_algorithm not in _ALLOWED_CHECKSUM_ALGORITHMS:
+        findings.append(TransitionFinding.BACKUP_ALGORITHM_UNSUPPORTED)
+    record_size = backup_record.size_bytes
+    if isinstance(record_size, bool) or not isinstance(record_size, int):
+        findings.append(TransitionFinding.INPUT_NOT_CANONICALIZABLE)
+    elif record_size != receipt.backup.size_bytes:
         findings.append(TransitionFinding.BACKUP_SIZE_MISMATCH)
+    if backup_record.path.startswith(EXTERNAL_BACKUP_PATH_PREFIX):
+        findings.append(TransitionFinding.BACKUP_RECORD_NOT_ARTEFACT_BOUND)
     return findings
 
 

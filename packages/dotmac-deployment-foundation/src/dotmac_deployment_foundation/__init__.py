@@ -219,6 +219,7 @@ from .exposure import (
     verify_exposure,
 )
 from .external_recovery import (
+    EXTERNAL_BACKUP_PATH_PREFIX,
     EXTERNAL_RECEIPT_SCHEMA,
     VERIFICATION_EVIDENCE,
     ExternalRecoveryReceiptV1,
@@ -530,6 +531,7 @@ __all__ = [
     "EXECUTION_PLAN_SCHEMA",
     "EXECUTOR_KINDS",
     "EXPOSURES",
+    "EXTERNAL_BACKUP_PATH_PREFIX",
     "EXTERNAL_RECEIPT_SCHEMA",
     "EdgeEndpoint",
     "EffectivePrivilegeAuditUniverse",
