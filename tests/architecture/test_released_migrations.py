@@ -1853,6 +1853,18 @@ RELEASED_TAGS: dict[str, tuple[str, str, dict[str, str]]] = {
         },
     ),
     # ── dotmac-commercial-agreements ──
+    "dotmac-commercial-agreements-v0.1.0a4": (
+        "dotmac-commercial-agreements",
+        "9a5e433d7b22efc5d21a6f8a1ead0c73effaca6d",
+        {
+            "cg_0001_agreements.py": (
+                "ac9e5f698f1814381a5987274131b186e9b0c0237b03314164cd69aa3806ec38"
+            ),
+            "cg_0002_approval_withdrawals.py": (
+                "bdf4bd7743454681c218728afdb664fa3eb69f6c6e9ecf9eacb670a1a789e2f2"
+            ),
+        },
+    ),
     "dotmac-commercial-agreements-v0.1.0a1": (
         "dotmac-commercial-agreements",
         "fead57bc93d6551450f5e6ae1c9de1296e27b0ae",
@@ -7170,7 +7182,7 @@ UNRELEASED: dict[str, frozenset[str]] = {
     "dotmac-template-studio": frozenset(),
     # `cg_0002` records approval withdrawals as standing; still editable until
     # `dotmac-commercial-agreements` 0.1.0a4 is tagged.
-    "dotmac-commercial-agreements": frozenset({"cg_0002_approval_withdrawals.py"}),
+    "dotmac-commercial-agreements": frozenset(),
     "dotmac-people": frozenset(),
     "dotmac-inbox": frozenset(
         {"ib_0002_supplied_identity.py", "ib_0003_transport_refs.py"}
