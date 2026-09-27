@@ -51,15 +51,20 @@ duplicates in ``observed_target_heads`` explicitly, before ever comparing sets.
 descriptor". :func:`verify_transition_receipt` calls exactly that — it does
 not hash the descriptor a second way.
 
-## Why ``spec`` is untyped here, the same way it is in ``recovery.restore_plan``
+## Why ``spec`` is untyped here even though this module does import ``spec.py``
 
-``spec.py`` imports ``EXTERNAL_ONLY_VERIFICATIONS`` from ``recovery.py``, so a
-module in this family that imported ``ProductDeploymentSpec`` back would risk
-the same import cycle ``recovery.restore_plan`` was written to avoid. This
-module takes the identical path: ``spec`` is accessed by attribute
-(``spec.product``, ``spec.migration.expected_heads``,
-``spec.to_canonical_document()``) rather than by import, so this module makes
-no promise about which concrete type ``spec`` is beyond the shape it reads.
+This module imports ``spec.py`` for one concrete name
+(``BackupDataset.CHECKSUMS`` — see :data:`_ALLOWED_CHECKSUM_ALGORITHMS``),
+so the import-cycle argument that once justified keeping ``spec.py``
+unimported no longer holds; ``external_recovery.py``, which this module also
+imports, already imports ``spec.py`` at top level, and no cycle results.
+``verify_transition_receipt``'s ``spec`` PARAMETER stays untyped (``Any``)
+regardless, for a narrower reason than avoiding an import: this function's
+contract is the SHAPE it reads off ``spec`` (``spec.product``,
+``spec.environment``, ``spec.source_revision``, ``spec.image_digest``,
+``spec.migration.expected_heads``, ``spec.to_canonical_document()``), not a
+promise to accept exactly one concrete class — the same shape-typed
+duck-typing :func:`recovery.restore_plan` uses ``spec: Any`` for.
 
 ## The chain, and what "first receipt" means
 
@@ -150,6 +155,11 @@ custody depends on, so accepting an uppercase or bare-hex spelling here and
 rewriting it would let a byte-for-byte comparison against an externally-signed
 or previously-hashed copy of the same receipt silently diverge. A producer
 that emits anything else is refused at the boundary rather than accommodated.
+:func:`verify_transition_receipt`'s ``observed_image_digest`` — not receipt
+content, but an external observation — is held to the identical canonical
+rule (``OBSERVED_IMAGE_MALFORMED`` for anything else), for the same reason:
+normalizing the caller's spelling before comparing would hide the exact
+spelling drift a byte-for-byte match exists to catch.
 """
 
 from __future__ import annotations
@@ -166,6 +176,7 @@ from .digest import Digest
 from .errors import SpecError
 from .external_recovery import EXTERNAL_BACKUP_PATH_PREFIX
 from .secrets_guard import require_no_secrets
+from .spec import BackupDataset
 
 __all__ = [
     "TRANSITION_RECEIPT_SCHEMA",
@@ -190,13 +201,21 @@ _REVISION = re.compile(r"^[0-9a-f]{40}$")
 #: accepts canonical input only" for why this refuses rather than normalizes.
 _CANONICAL_DIGEST = re.compile(r"^sha256:[0-9a-f]{64}$")
 
-#: Mirrors `spec.BackupDataset.CHECKSUMS` (spec.py:1449). Not imported from
-#: there: this module deliberately never imports `spec.py` (see the module
-#: docstring's "Why `spec` is untyped here") to avoid coupling to a concrete
-#: `ProductDeploymentSpec` type the same way `recovery.restore_plan` avoids
-#: it. Kept in sync by hand — if the allowed set changes in one place, it
-#: must change in the other.
-_ALLOWED_CHECKSUM_ALGORITHMS: Final[tuple[str, ...]] = ("sha256", "sha512")
+#: The one allowed checksum-algorithm set, taken directly from
+#: `BackupDataset.CHECKSUMS` (spec.py) rather than a hand-mirrored copy — see
+#: the module docstring's "Why `spec` is untyped here" for why importing this
+#: one name is safe despite `verify_transition_receipt`'s `spec` parameter
+#: staying untyped.
+_ALLOWED_CHECKSUM_ALGORITHMS: Final[tuple[str, ...]] = BackupDataset.CHECKSUMS
+
+#: `bundle_digest`'s expected hex length, by algorithm — matches
+#: `_ALLOWED_CHECKSUM_ALGORITHMS`. Existing producers (`external_recovery.py`,
+#: this package's own tests) spell a checksum as BARE lowercase hex, the same
+#: shape `Digest.hex` documents as "the shape Control's column holds" — never
+#: `sha256:`-prefixed — so this checks bare hex of the right length rather
+#: than inventing a new spelling.
+_CHECKSUM_HEX_LENGTHS: Final[dict[str, int]] = {"sha256": 64, "sha512": 128}
+_LOWERCASE_HEX = re.compile(r"^[0-9a-f]+$")
 
 
 # ── small strict-parsing helpers, mirroring transition.py's own ────────────
@@ -437,16 +456,18 @@ class TransitionBackup:
     ``BackupRecord.path`` — the one field that already uniquely names which
     backup a record describes, PROVIDED that path locates a real, locally
     written artefact. A record built by
-    :func:`~.external_recovery.backup_record_from_receipt` does not: its
-    caller writes ``path=f"{EXTERNAL_BACKUP_PATH_PREFIX}{executor identifier}"``
-    (see `engine/run.py`) and ``size_bytes=max(1, restore_duration_seconds)``
-    — a stand-in identifying WHICH EXECUTOR ran, and a byte count that is
-    actually a duration in seconds, not a real artefact id and size. This
-    module refuses such a record (``BACKUP_RECORD_NOT_ARTEFACT_BOUND``) rather
-    than let ``bundle_id``/``size_bytes`` agreement on those stand-in values
-    be read as agreement on the backup itself. Verifying a transition whose
-    backup was externally proved is a tracked follow-up, not silently
-    accepted here.
+    :func:`~.external_recovery.backup_record_from_receipt` does not: its one
+    caller (`engine/run.py`) writes
+    ``path=f"{EXTERNAL_BACKUP_PATH_PREFIX}{executor identifier}"`` — enforced
+    by :func:`~.external_recovery.backup_record_from_receipt` itself, which
+    refuses any other spelling — and ``size_bytes=max(1,
+    restore_duration_seconds)``: a stand-in identifying WHICH EXECUTOR ran,
+    and a byte count that is actually a duration in seconds, not a real
+    artefact id and size. This module refuses such a record
+    (``BACKUP_RECORD_NOT_ARTEFACT_BOUND``) rather than let
+    ``bundle_id``/``size_bytes`` agreement on those stand-in values be read
+    as agreement on the backup itself. Verifying a transition whose backup
+    was externally proved is a tracked follow-up, not silently accepted here.
     """
 
     bundle_digest: str
@@ -659,10 +680,12 @@ class TransitionFinding(str, Enum):
     IMAGE_DIGEST_MISMATCH = "image_digest_mismatch"
     OBSERVED_IMAGE_MALFORMED = "observed_image_malformed"
     IMAGE_REVISION_INVALID = "image_revision_invalid"
+    IMAGE_REVISION_DESCRIPTOR_MISMATCH = "image_revision_descriptor_mismatch"
     BACKUP_NOT_RECOVERY_BUNDLE = "backup_not_recovery_bundle"
     BACKUP_ASSURANCE_TOO_LOW = "backup_assurance_too_low"
     BACKUP_ID_MISMATCH = "backup_id_mismatch"
     BACKUP_DIGEST_MISMATCH = "backup_digest_mismatch"
+    BACKUP_DIGEST_MALFORMED = "backup_digest_malformed"
     BACKUP_ALGORITHM_UNSUPPORTED = "backup_algorithm_unsupported"
     BACKUP_SIZE_MISMATCH = "backup_size_mismatch"
     BACKUP_RECORD_NOT_ARTEFACT_BOUND = "backup_record_not_artefact_bound"
@@ -781,7 +804,9 @@ def _check_target_heads(
     if len(set(observed_list)) != len(observed_list):
         findings.append(TransitionFinding.TARGET_HEADS_DUPLICATE)
     declared = set(receipt.target_side.migration_heads)
-    expected = {str(head) for head in spec.migration.expected_heads}
+    # `spec.migration.expected_heads` is already `tuple[str, ...]` (parsed by
+    # `Migration.parse`'s `table.str_list(...)`) -- no `str()` coercion needed.
+    expected = set(spec.migration.expected_heads)
     observed = set(observed_list)
     if declared != expected:
         findings.append(TransitionFinding.TARGET_HEADS_DECLARED_VS_SPEC)
@@ -809,8 +834,14 @@ def _check_image(
     if receipt.target_side.image_digest != spec.image_digest:
         findings.append(TransitionFinding.IMAGE_DESCRIPTOR_MISMATCH)
     try:
-        observed = str(
-            Digest.parse(observed_image_digest, where="observed_image_digest")
+        # Canonical-only, like `parse()` -- see the module docstring's
+        # "Parsing accepts canonical input only". `observed_image_digest` is
+        # an external observation, not receipt content, but a caller who
+        # normalizes an uppercase or bare-hex spelling before comparing would
+        # hide the exact spelling drift a byte-for-byte match is supposed to
+        # catch, so this refuses rather than normalizes too.
+        observed = _canonical_digest(
+            observed_image_digest, where="observed_image_digest"
         )
     except SpecError:
         findings.append(TransitionFinding.OBSERVED_IMAGE_MALFORMED)
@@ -819,6 +850,8 @@ def _check_image(
             findings.append(TransitionFinding.IMAGE_DIGEST_MISMATCH)
     if not _REVISION.match(receipt.target_side.image_source_revision):
         findings.append(TransitionFinding.IMAGE_REVISION_INVALID)
+    if receipt.target_side.image_source_revision != spec.source_revision:
+        findings.append(TransitionFinding.IMAGE_REVISION_DESCRIPTOR_MISMATCH)
     return findings
 
 
@@ -839,6 +872,12 @@ def _check_backup(
         findings.append(TransitionFinding.BACKUP_DIGEST_MISMATCH)
     if receipt.backup.checksum_algorithm not in _ALLOWED_CHECKSUM_ALGORITHMS:
         findings.append(TransitionFinding.BACKUP_ALGORITHM_UNSUPPORTED)
+    expected_hex_length = _CHECKSUM_HEX_LENGTHS.get(receipt.backup.checksum_algorithm)
+    if expected_hex_length is not None and (
+        not _LOWERCASE_HEX.match(receipt.backup.bundle_digest)
+        or len(receipt.backup.bundle_digest) != expected_hex_length
+    ):
+        findings.append(TransitionFinding.BACKUP_DIGEST_MALFORMED)
     record_size = backup_record.size_bytes
     if isinstance(record_size, bool) or not isinstance(record_size, int):
         findings.append(TransitionFinding.INPUT_NOT_CANONICALIZABLE)

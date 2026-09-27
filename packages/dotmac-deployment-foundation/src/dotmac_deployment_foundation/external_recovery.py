@@ -94,15 +94,16 @@ from .spec import BackupDataset, ProductDeploymentSpec
 
 EXTERNAL_RECEIPT_SCHEMA: Final = "RecoveryReceipt.v1"
 
-#: The `BackupRecord.path` prefix every caller of :func:`backup_record_from_receipt`
-#: uses for the record it builds from an external recovery receipt (see
-#: `engine/run.py`'s
+#: The `BackupRecord.path` prefix every record built from an external
+#: recovery receipt carries (`engine/run.py`'s
 #: ``path=f"{EXTERNAL_BACKUP_PATH_PREFIX}{receipt.executor.identifier}"``).
-#: `backup_record_from_receipt` takes `path`/`size_bytes` from its caller rather
-#: than constructing them, so this module does not enforce the convention
-#: itself — it names it, as the ONE place both this module's callers and any
-#: reader of a `BackupRecord` (see `transition_receipt.py`'s use of this
-#: constant to detect such a record) agree on what "external" looks like.
+#: `backup_record_from_receipt` REFUSES a `path` that does not start with
+#: this prefix (`SpecError`) — it is the only producer of such a record, so
+#: that refusal is what makes the prefix load-bearing rather than a
+#: convention a caller could quietly violate. This is the ONE place both
+#: this module and any reader of a `BackupRecord` (see `transition_receipt
+#: .py`'s use of this constant to detect such a record) agree on what
+#: "external" looks like.
 EXTERNAL_BACKUP_PATH_PREFIX: Final = "external:"
 
 #: Stands in for the key id a signed document deliberately does not carry.
@@ -419,7 +420,22 @@ def backup_record_from_receipt(
     RESTORABLE or PROVED — and an accepted receipt has already established the
     thing that refusal is protecting: a restore actually happened, into an
     isolated target, and the privilege surface was checked.
+
+    ``path`` must start with :data:`EXTERNAL_BACKUP_PATH_PREFIX`. This is the
+    ONLY producer of a `BackupRecord` from an external receipt, so refusing a
+    non-prefixed path here is what makes the prefix load-bearing rather than
+    a convention a caller could quietly violate: `transition_receipt.py`
+    detects "this record came from an external receipt, not a real artefact"
+    entirely by checking for that prefix, and a producer free to omit it
+    would make that detection unreliable.
     """
+    if not path.startswith(EXTERNAL_BACKUP_PATH_PREFIX):
+        raise SpecError(
+            f"backup_record_from_receipt: path {path!r} must start with "
+            f"{EXTERNAL_BACKUP_PATH_PREFIX!r} — this is the one producer of a "
+            "BackupRecord from an external receipt, and a reader elsewhere "
+            "identifies such a record by that prefix alone"
+        )
     return BackupRecord(
         dataset=receipt.identity.dataset,
         path=path,
