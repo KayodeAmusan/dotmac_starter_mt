@@ -415,6 +415,17 @@ from .transition import (
     recover_database_promotion,
     require_database_precondition,
 )
+from .transition_receipt import (
+    TRANSITION_RECEIPT_SCHEMA,
+    TargetSide,
+    TransitionBackup,
+    TransitionFinding,
+    TransitionOutcome,
+    TransitionReceiptV1,
+    TransitionSide,
+    TransitionVerdict,
+    verify_transition_receipt,
+)
 from .trusted_host_source import (
     ATTESTATION_SCHEMA,
     CANDIDATE_ATTESTATION_PURPOSE,
@@ -682,6 +693,15 @@ __all__ = [
     "StructureFactDimension",
     "StructureFactDirection",
     "TUNNEL_KINDS",
+    "TRANSITION_RECEIPT_SCHEMA",
+    "TargetSide",
+    "TransitionBackup",
+    "TransitionFinding",
+    "TransitionOutcome",
+    "TransitionReceiptV1",
+    "TransitionSide",
+    "TransitionVerdict",
+    "verify_transition_receipt",
     "TrustPolicy",
     "UnknownFieldError",
     "UnknownSchemaError",
