@@ -70,6 +70,86 @@ a history it does not have, and a non-first receipt that names none is
 claiming to be the start of a chain that already exists. Both refusals are
 distinct finding codes for the same reason every other pair in this module is:
 an operator debugging a broken chain needs to know WHICH end broke.
+
+## Genesis is anchored, never inferred
+
+A first receipt's source cannot be verified by comparing it to a
+``previous_receipt`` — there is none. The temptation is to treat "no
+``previous_receipt``" as "trust the receipt's own ``source``", which would let
+a chain start ANYWHERE the receipt claims, unverified. Instead the caller must
+name where the chain starts by passing ``genesis_source`` — the descriptor and
+heads the chain actually left from, established independently of the receipt —
+and the verifier checks the receipt's ``source`` against it. Exactly one of
+``previous_receipt`` and ``genesis_source`` is given for any one receipt: both
+absent means "verify this against nothing", and both present is a caller that
+cannot decide whether this is the first hop. Both are refused as
+``CHAIN_ANCHOR_AMBIGUOUS`` rather than one silently winning.
+
+## A chain is per product, environment and target
+
+``previous_receipt`` links two receipts of the SAME transition history.
+Product, environment and target identify which history that is; a receipt
+whose product, environment or target differs from its predecessor's is not a
+continuation of that chain, it is a different deployment that happens to name
+the same previous digest — refused as ``CHAIN_SCOPE_MISMATCH``. Moving to a
+different host is not a transition along the chain; it is the start of a new
+one (via ``genesis_source``, not ``previous_receipt``).
+
+## The receipt says less than the run that produced it
+
+``run_id`` identifies the run that produced the receipt — not what the
+descriptor says, but who is claiming to have done the work. A caller supplies
+the run id it actually launched (``expected_run_id``) and the target it
+actually launched onto (``expected_target``); a receipt naming a different run
+or a different target is not evidence about the run or target the caller
+cares about, no matter how well everything else in it checks out. A receipt
+that reuses its predecessor's ``run_id`` (``RUN_ID_REUSED``) is claiming two
+distinct hops happened under one run, which the run identity was supposed to
+rule out.
+
+## Relationship to ``transition.py``
+
+:class:`~.transition.DatabaseTransitionV1` and
+:class:`~.transition.DatabaseTransitionReceiptV1` are a DIFFERENT, narrower
+receipt: one pre-authored database-descriptor transition
+(``from_descriptor_digest`` → ``to_descriptor_digest``, optionally through
+declared checkpoints) and the terminal evidence that one database's result and
+descriptor promotion agree. This module's :class:`TransitionReceiptV1` is
+broader and host-scoped rather than database-scoped: it binds a whole
+deployment host's source-to-target hop — descriptor, migration heads, the
+image it now runs, the backup it was restored from, and the run that did it —
+so D16 recovery can verify a promotion or rollback across everything that
+moved, not only the database. The two receipts are produced by different
+actors for different questions and neither reads the other; a deployment that
+uses both keeps them as separate, independently verifiable records.
+
+## Canonical form (the golden vector this module is pinned to)
+
+A receipt's digest is ``sha256`` over ``as_mapping()`` rendered with
+``json.dumps(..., sort_keys=True, separators=(",", ":"), ensure_ascii=False)``:
+keys sorted at every depth, no insignificant whitespace, and
+``previous_receipt_digest`` present as JSON ``null`` for a genesis receipt
+rather than omitted. ``ensure_ascii=False`` is deliberate and is kept exactly
+as it is — it differs from :mod:`external_recovery`, which canonicalizes with
+``ensure_ascii`` at its default (``True``); a cross-repo producer that hashes
+the same document differently from either module produces a digest nothing
+here will ever match, which is the entire point of pinning the exact
+serialization in a golden-vector test rather than merely testing that
+``parse`` and ``as_mapping`` round-trip.
+
+## Parsing accepts canonical input only
+
+``parse`` and the ``__post_init__`` of every sub-shape refuse a digest-shaped
+field (a descriptor digest, the target image digest, or
+``previous_receipt_digest``) that is not ALREADY exactly ``sha256:`` followed
+by 64 lowercase hex characters, and refuse any string field carrying leading
+or trailing whitespace. This module does not silently normalize a
+differently-spelled digest into its canonical form the way :class:`Digest`
+does for other callers (see ``digest.py``): a receipt is evidence a chain of
+custody depends on, so accepting an uppercase or bare-hex spelling here and
+rewriting it would let a byte-for-byte comparison against an externally-signed
+or previously-hashed copy of the same receipt silently diverge. A producer
+that emits anything else is refused at the boundary rather than accommodated.
 """
 
 from __future__ import annotations
@@ -104,21 +184,43 @@ TRANSITION_RECEIPT_SCHEMA: Final = "DeploymentTransitionReceipt.v1"
 #: revision names a commit, not a content hash of a known algorithm.
 _REVISION = re.compile(r"^[0-9a-f]{40}$")
 
+#: The one accepted spelling of a digest this module parses: `sha256:` plus 64
+#: lowercase hex characters, exactly. See the module docstring's "Parsing
+#: accepts canonical input only" for why this refuses rather than normalizes.
+_CANONICAL_DIGEST = re.compile(r"^sha256:[0-9a-f]{64}$")
+
 
 # ── small strict-parsing helpers, mirroring transition.py's own ────────────
-
-
-def _required(value: str, *, where: str) -> str:
-    text = str(value).strip()
-    if not text:
-        raise SpecError(f"{where} is required and cannot be empty")
-    return text
 
 
 def _str(value: object, *, where: str) -> str:
     if not isinstance(value, str):
         raise SpecError(f"{where} must be a string, got {type(value).__name__}")
     return value
+
+
+def _required(value: object, *, where: str) -> str:
+    text = _str(value, where=where)
+    if text != text.strip():
+        raise SpecError(f"{where} must not have leading or trailing whitespace")
+    if not text:
+        raise SpecError(f"{where} is required and cannot be empty")
+    return text
+
+
+def _canonical_digest(value: object, *, where: str) -> str:
+    """Refuse anything but ``sha256:`` + 64 lowercase hex. See the module
+    docstring: this module does not normalize a differently-spelled digest."""
+    text = _str(value, where=where)
+    if text != text.strip():
+        raise SpecError(f"{where} must not have leading or trailing whitespace")
+    if not _CANONICAL_DIGEST.match(text):
+        raise SpecError(
+            f"{where}: {text!r} is not a canonical digest (sha256: followed by "
+            "64 lowercase hex characters). This module parses canonical input "
+            "only; fix the producer rather than relying on normalization here"
+        )
+    return text
 
 
 def _int(value: object, *, where: str) -> int:
@@ -142,11 +244,29 @@ def _strict(document: Mapping[str, Any], *, where: str, known: set[str]) -> None
         raise SpecError(f"{where} is missing required field(s) {missing}")
 
 
-def _validated_heads(heads: Sequence[str], *, where: str) -> tuple[str, ...]:
+def _validated_heads(heads: object, *, where: str) -> tuple[str, ...]:
     """Sorted and unique, or refuse. See the module docstring for why this is a
     construction-time invariant on the receipt's OWN declared heads, distinct
-    from the raw ``observed_target_heads`` a verifier compares it with."""
-    values = tuple(str(item) for item in heads)
+    from the raw ``observed_target_heads`` a verifier compares it with.
+
+    A bare ``str``/``bytes`` is refused rather than iterated character-by-
+    character (the classic gotcha of ``tuple(str(item) for item in "abc")``),
+    and every element must already be a ``str`` — this constructs from
+    already-typed data, so a non-string element is a caller bug, not a value
+    to coerce.
+    """
+    if isinstance(heads, (str, bytes)):
+        raise SpecError(
+            f"{where} must be a list of strings, not a bare {type(heads).__name__}"
+        )
+    if not isinstance(heads, Sequence):
+        raise SpecError(f"{where} must be a list of strings")
+    values: tuple[str, ...] = tuple(heads)
+    for item in values:
+        if not isinstance(item, str):
+            raise SpecError(
+                f"{where}: migration head must be a string, got {type(item).__name__}"
+            )
     seen: set[str] = set()
     for value in values:
         if value in seen:
@@ -171,10 +291,8 @@ class TransitionSide:
         object.__setattr__(
             self,
             "descriptor_sha256",
-            str(
-                Digest.parse(
-                    self.descriptor_sha256, where="transition_side.descriptor_sha256"
-                )
+            _canonical_digest(
+                self.descriptor_sha256, where="transition_side.descriptor_sha256"
             ),
         )
         object.__setattr__(
@@ -229,10 +347,8 @@ class TargetSide:
         object.__setattr__(
             self,
             "descriptor_sha256",
-            str(
-                Digest.parse(
-                    self.descriptor_sha256, where="target_side.descriptor_sha256"
-                )
+            _canonical_digest(
+                self.descriptor_sha256, where="target_side.descriptor_sha256"
             ),
         )
         object.__setattr__(
@@ -243,7 +359,7 @@ class TargetSide:
         object.__setattr__(
             self,
             "image_digest",
-            str(Digest.parse(self.image_digest, where="target_side.image_digest")),
+            _canonical_digest(self.image_digest, where="target_side.image_digest"),
         )
         object.__setattr__(
             self,
@@ -293,12 +409,24 @@ class TargetSide:
 class TransitionBackup:
     """The backup a target was restored from, as the receipt names it.
 
-    ``bundle_digest`` is deliberately NOT run through :class:`Digest` — a
-    :class:`~.backup.BackupRecord` checksum is not guaranteed to be a
-    ``sha256:``-prefixed value (``backup_record_from_receipt`` carries whatever
+    ``bundle_digest`` is deliberately NOT run through :class:`Digest`, and is
+    NOT required to be canonical ``sha256:``-prefixed form the way the other
+    digest-shaped fields on this receipt are — a :class:`~.backup.BackupRecord`
+    checksum is not guaranteed to be a ``sha256:``-prefixed value
+    (``backup_record_from_receipt`` carries whatever
     ``snapshot_checksum_algorithm`` an external executor declared), so forcing
     the receipt's shape to be narrower than the record it is compared against
-    would make an honest match unrepresentable.
+    would make an honest match unrepresentable. It is still refused if it
+    carries leading or trailing whitespace, and is compared to
+    ``BackupRecord.checksum`` by exact string equality, unnormalized, alongside
+    ``checksum_algorithm`` (see :func:`_check_backup`) — the same comparison
+    this module always made, not a new one.
+
+    ``bundle_id`` binds this receipt to a *specific* backup artefact.
+    :class:`~.backup.BackupRecord` carries no id field of its own, so
+    ``bundle_id`` is defined to be exactly the recorded artefact
+    ``BackupRecord.path`` — the one field that already uniquely names which
+    backup a record describes.
     """
 
     bundle_digest: str
@@ -320,7 +448,7 @@ class TransitionBackup:
         object.__setattr__(
             self, "bundle_id", _required(self.bundle_id, where="backup.bundle_id")
         )
-        size = int(self.size_bytes)
+        size = _int(self.size_bytes, where="backup.size_bytes")
         if size < 0:
             raise SpecError("backup.size_bytes cannot be negative")
         object.__setattr__(self, "size_bytes", size)
@@ -389,11 +517,9 @@ class TransitionReceiptV1:
             object.__setattr__(
                 self,
                 "previous_receipt_digest",
-                str(
-                    Digest.parse(
-                        self.previous_receipt_digest,
-                        where="transition_receipt.previous_receipt_digest",
-                    )
+                _canonical_digest(
+                    self.previous_receipt_digest,
+                    where="transition_receipt.previous_receipt_digest",
                 ),
             )
 
@@ -494,21 +620,32 @@ class TransitionFinding(str, Enum):
     class mismatch) needs something to switch on other than prose.
     """
 
+    CHAIN_ANCHOR_AMBIGUOUS = "chain_anchor_ambiguous"
     CHAIN_DIGEST_MISMATCH = "chain_digest_mismatch"
     CHAIN_SOURCE_MISMATCH = "chain_source_mismatch"
+    CHAIN_SCOPE_MISMATCH = "chain_scope_mismatch"
     CHAIN_PREVIOUS_UNEXPECTED = "chain_previous_unexpected"
     CHAIN_PREVIOUS_MISSING = "chain_previous_missing"
-    TARGET_HEADS_MISSING = "target_heads_missing"
-    TARGET_HEADS_EXTRA = "target_heads_extra"
+    GENESIS_SOURCE_MISMATCH = "genesis_source_mismatch"
+    RUN_ID_MISMATCH = "run_id_mismatch"
+    RUN_ID_REUSED = "run_id_reused"
+    ENVIRONMENT_MISMATCH = "environment_mismatch"
+    TARGET_MISMATCH = "target_mismatch"
+    TARGET_HEADS_DECLARED_VS_SPEC = "target_heads_declared_vs_spec"
+    TARGET_HEADS_DECLARED_VS_OBSERVED = "target_heads_declared_vs_observed"
     TARGET_HEADS_DUPLICATE = "target_heads_duplicate"
     TARGET_DESCRIPTOR_MISMATCH = "target_descriptor_mismatch"
+    IMAGE_DESCRIPTOR_MISMATCH = "image_descriptor_mismatch"
     IMAGE_DIGEST_MISMATCH = "image_digest_mismatch"
+    OBSERVED_IMAGE_MALFORMED = "observed_image_malformed"
     IMAGE_REVISION_INVALID = "image_revision_invalid"
     BACKUP_NOT_RECOVERY_BUNDLE = "backup_not_recovery_bundle"
     BACKUP_ASSURANCE_TOO_LOW = "backup_assurance_too_low"
+    BACKUP_ID_MISMATCH = "backup_id_mismatch"
     BACKUP_DIGEST_MISMATCH = "backup_digest_mismatch"
     BACKUP_SIZE_MISMATCH = "backup_size_mismatch"
     PRODUCT_MISMATCH = "product_mismatch"
+    INPUT_NOT_CANONICALIZABLE = "input_not_canonicalizable"
 
 
 @dataclasses.dataclass(frozen=True, slots=True)
@@ -527,18 +664,69 @@ class TransitionVerdict:
 # ── the checks, one function per finding family ─────────────────────────────
 
 
-def _check_chain(
-    receipt: TransitionReceiptV1, previous_receipt: TransitionReceiptV1 | None
+def _check_run_identity(
+    receipt: TransitionReceiptV1,
+    expected_run_id: str,
+    previous_receipt: TransitionReceiptV1 | None,
 ) -> list[TransitionFinding]:
-    if previous_receipt is None:
+    findings: list[TransitionFinding] = []
+    if receipt.run_id != expected_run_id:
+        findings.append(TransitionFinding.RUN_ID_MISMATCH)
+    if previous_receipt is not None and previous_receipt.run_id == receipt.run_id:
+        findings.append(TransitionFinding.RUN_ID_REUSED)
+    return findings
+
+
+def _check_scope(
+    receipt: TransitionReceiptV1,
+    spec: Any,
+    expected_target: str,
+    previous_receipt: TransitionReceiptV1 | None,
+) -> list[TransitionFinding]:
+    findings: list[TransitionFinding] = []
+    if receipt.environment != spec.environment:
+        findings.append(TransitionFinding.ENVIRONMENT_MISMATCH)
+    if receipt.target != expected_target:
+        findings.append(TransitionFinding.TARGET_MISMATCH)
+    if previous_receipt is not None and (
+        receipt.product != previous_receipt.product
+        or receipt.environment != previous_receipt.environment
+        or receipt.target != previous_receipt.target
+    ):
+        findings.append(TransitionFinding.CHAIN_SCOPE_MISMATCH)
+    return findings
+
+
+def _check_chain(
+    receipt: TransitionReceiptV1,
+    previous_receipt: TransitionReceiptV1 | None,
+    genesis_source: TransitionSide | None,
+) -> list[TransitionFinding]:
+    if (previous_receipt is None) == (genesis_source is None):
+        # Neither given (verify against nothing) or both given (the caller
+        # cannot decide whether this is the first hop) are equally refused —
+        # see the module docstring's "Genesis is anchored, never inferred".
+        return [TransitionFinding.CHAIN_ANCHOR_AMBIGUOUS]
+
+    if genesis_source is not None:
+        findings: list[TransitionFinding] = []
         if receipt.previous_receipt_digest is not None:
-            return [TransitionFinding.CHAIN_PREVIOUS_UNEXPECTED]
-        return []
+            findings.append(TransitionFinding.CHAIN_PREVIOUS_UNEXPECTED)
+        if receipt.source != genesis_source:
+            findings.append(TransitionFinding.GENESIS_SOURCE_MISMATCH)
+        return findings
+
+    assert previous_receipt is not None  # narrowed by the xor check above
     if receipt.previous_receipt_digest is None:
         return [TransitionFinding.CHAIN_PREVIOUS_MISSING]
-    findings: list[TransitionFinding] = []
-    if Digest.parse(receipt.previous_receipt_digest) != previous_receipt.digest():
-        findings.append(TransitionFinding.CHAIN_DIGEST_MISMATCH)
+    findings = []
+    try:
+        previous_digest = str(previous_receipt.digest())
+    except SpecError:
+        findings.append(TransitionFinding.INPUT_NOT_CANONICALIZABLE)
+    else:
+        if receipt.previous_receipt_digest != previous_digest:
+            findings.append(TransitionFinding.CHAIN_DIGEST_MISMATCH)
     previous_target = previous_receipt.target_side
     if (
         receipt.source.descriptor_sha256 != previous_target.descriptor_sha256
@@ -558,29 +746,40 @@ def _check_target_heads(
     declared = set(receipt.target_side.migration_heads)
     expected = {str(head) for head in spec.migration.expected_heads}
     observed = set(observed_list)
-    if (expected - declared) or (observed - declared):
-        findings.append(TransitionFinding.TARGET_HEADS_MISSING)
-    if (declared - expected) or (declared - observed):
-        findings.append(TransitionFinding.TARGET_HEADS_EXTRA)
+    if declared != expected:
+        findings.append(TransitionFinding.TARGET_HEADS_DECLARED_VS_SPEC)
+    if declared != observed:
+        findings.append(TransitionFinding.TARGET_HEADS_DECLARED_VS_OBSERVED)
     return findings
 
 
 def _check_target_descriptor(
     receipt: TransitionReceiptV1, spec: Any
 ) -> list[TransitionFinding]:
-    computed = str(spec.to_canonical_document().sha256_digest())
+    try:
+        computed = str(spec.to_canonical_document().sha256_digest())
+    except SpecError:
+        return [TransitionFinding.INPUT_NOT_CANONICALIZABLE]
     if receipt.target_side.descriptor_sha256 != computed:
         return [TransitionFinding.TARGET_DESCRIPTOR_MISMATCH]
     return []
 
 
 def _check_image(
-    receipt: TransitionReceiptV1, expected_image_digest: str
+    receipt: TransitionReceiptV1, spec: Any, observed_image_digest: str
 ) -> list[TransitionFinding]:
     findings: list[TransitionFinding] = []
-    expected = str(Digest.parse(expected_image_digest, where="expected_image_digest"))
-    if receipt.target_side.image_digest != expected:
-        findings.append(TransitionFinding.IMAGE_DIGEST_MISMATCH)
+    if receipt.target_side.image_digest != spec.image_digest:
+        findings.append(TransitionFinding.IMAGE_DESCRIPTOR_MISMATCH)
+    try:
+        observed = str(
+            Digest.parse(observed_image_digest, where="observed_image_digest")
+        )
+    except SpecError:
+        findings.append(TransitionFinding.OBSERVED_IMAGE_MALFORMED)
+    else:
+        if receipt.target_side.image_digest != observed:
+            findings.append(TransitionFinding.IMAGE_DIGEST_MISMATCH)
     if not _REVISION.match(receipt.target_side.image_source_revision):
         findings.append(TransitionFinding.IMAGE_REVISION_INVALID)
     return findings
@@ -594,6 +793,8 @@ def _check_backup(
         findings.append(TransitionFinding.BACKUP_NOT_RECOVERY_BUNDLE)
     if backup_record.assurance.rank < Assurance.VERIFIED.rank:
         findings.append(TransitionFinding.BACKUP_ASSURANCE_TOO_LOW)
+    if receipt.backup.bundle_id != backup_record.path:
+        findings.append(TransitionFinding.BACKUP_ID_MISMATCH)
     if (
         backup_record.checksum != receipt.backup.bundle_digest
         or backup_record.checksum_algorithm != receipt.backup.checksum_algorithm
@@ -617,24 +818,34 @@ def verify_transition_receipt(
     observed_target_heads: Sequence[str],
     previous_receipt: TransitionReceiptV1 | None,
     backup_record: BackupRecord,
-    expected_image_digest: str,
+    observed_image_digest: str,
+    expected_run_id: str,
+    expected_target: str,
+    genesis_source: TransitionSide | None = None,
 ) -> TransitionVerdict:
     """Every way ``receipt`` disagrees with the world. Empty means verified.
 
     PURE: no I/O, no clock, no network. Every input is a value already in
     hand — ``spec`` is the parsed descriptor, ``observed_target_heads`` is
     whatever the caller already read off the target, ``previous_receipt`` is
-    the prior link in the chain (or ``None`` for the first), and
-    ``backup_record`` is the caller's own evidence about the backup the target
-    was restored from. Returns findings rather than raising, driven by six
-    independent checks, so an operator sees every way the receipt is wrong at
-    once rather than one refusal per re-run.
+    the prior link in the chain, ``genesis_source`` is where the chain
+    actually starts (exactly one of the two is given — see the module
+    docstring's "Genesis is anchored, never inferred"), ``backup_record`` is
+    the caller's own evidence about the backup the target was restored from,
+    ``observed_image_digest`` is what the caller actually observed running,
+    and ``expected_run_id``/``expected_target`` are the run and target the
+    caller actually launched. Never raises: every disagreement, including an
+    input that cannot itself be canonicalized, becomes a
+    :class:`TransitionFinding` rather than an exception, so an operator sees
+    every way the receipt is wrong at once rather than one refusal per re-run.
     """
     findings: list[TransitionFinding] = []
-    findings.extend(_check_chain(receipt, previous_receipt))
+    findings.extend(_check_run_identity(receipt, expected_run_id, previous_receipt))
+    findings.extend(_check_scope(receipt, spec, expected_target, previous_receipt))
+    findings.extend(_check_chain(receipt, previous_receipt, genesis_source))
     findings.extend(_check_target_heads(receipt, spec, observed_target_heads))
     findings.extend(_check_target_descriptor(receipt, spec))
-    findings.extend(_check_image(receipt, expected_image_digest))
+    findings.extend(_check_image(receipt, spec, observed_image_digest))
     findings.extend(_check_backup(receipt, backup_record))
     findings.extend(_check_product(receipt, spec))
     outcome = TransitionOutcome.REFUSED if findings else TransitionOutcome.VERIFIED
