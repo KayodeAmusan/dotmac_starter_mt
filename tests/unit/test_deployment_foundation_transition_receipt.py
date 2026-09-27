@@ -1352,3 +1352,13 @@ def test_a_second_golden_vector_pins_non_ascii_and_a_chained_digest() -> None:
     assert receipt.canonical_bytes() == expected_canonical_bytes
     assert str(receipt.digest()) == expected_digest
     assert receipt.as_mapping() == document
+
+
+def test_the_checksum_allowlist_mirrors_the_dataset_contract() -> None:
+    """The verifier keeps its own copy so the module need not import `spec.py`;
+    this is what keeps that copy honest. A new dataset algorithm fails here
+    until the receipt verifier decides whether to accept it."""
+    from dotmac_deployment_foundation import transition_receipt
+    from dotmac_deployment_foundation.spec import BackupDataset
+
+    assert transition_receipt._ALLOWED_CHECKSUM_ALGORITHMS == BackupDataset.CHECKSUMS
