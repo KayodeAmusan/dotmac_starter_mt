@@ -25,11 +25,15 @@ previously read "`0.1.0a3` is declared and unreleased" — stale in the same way
 the a2 note once was. Its oracle-backed release record is not yet in
 `docs/inventories/module-release-verifications.json`.)
 
-`0.1.0a4` is declared and unreleased. Source presence is not registry evidence;
-Vendor stays on its exact a2 pin until a4 has passed the protected release
-workflow and Vendor deliberately adopts that immutable artifact.
+`0.1.0a4` is also published. Release run 36306297621 built, published and
+verified it; its annotated tag `dotmac-commercial-agreements-v0.1.0a4` (tag
+object `01e371750b64588904d2542e280ea21322c1dce7`) peels to
+`9a5e433d7b22efc5d21a6f8a1ead0c73effaca6d`, wheel sha256
+`4f71041baa02b9959360f091b83d9e4d420ad5f77749fc625a843b04499c29bc`, recorded in
+`docs/inventories/module-release-verifications.json`. Vendor adopts it only
+through its own protected lock workflow.
 
-## 0.1.0a4 — 2026-09-27 — prepared, unreleased (no tag, not on the index)
+## 0.1.0a4 — 2026-09-27 — published (tag `dotmac-commercial-agreements-v0.1.0a4`)
 
 **An approval withdrawal is recorded as approval STANDING, never as a lifecycle
 transition** (Gate-0 C2 S4, Michael 2026-09-27).

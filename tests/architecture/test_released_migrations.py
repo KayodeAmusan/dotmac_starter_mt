@@ -7180,8 +7180,6 @@ UNRELEASED: dict[str, frozenset[str]] = {
     "dotmac-service-access-policy": frozenset(),
     "dotmac-services": frozenset(),
     "dotmac-template-studio": frozenset(),
-    # `cg_0002` records approval withdrawals as standing; still editable until
-    # `dotmac-commercial-agreements` 0.1.0a4 is tagged.
     "dotmac-commercial-agreements": frozenset(),
     "dotmac-people": frozenset(),
     "dotmac-inbox": frozenset(
