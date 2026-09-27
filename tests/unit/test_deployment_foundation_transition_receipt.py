@@ -20,7 +20,15 @@ from unittest.mock import patch
 import pytest
 from dotmac_deployment_foundation.backup import ArtefactClass, Assurance, BackupRecord
 from dotmac_deployment_foundation.errors import SecretValueError, SpecError
-from dotmac_deployment_foundation.external_recovery import EXTERNAL_BACKUP_PATH_PREFIX
+from dotmac_deployment_foundation.external_recovery import (
+    EXTERNAL_BACKUP_PATH_PREFIX,
+    ExternalRecoveryReceiptV1,
+    backup_record_from_receipt,
+)
+from dotmac_deployment_foundation.recovery_identity import (
+    DatasetIdentityV1,
+    ExternalExecutorV1,
+)
 from dotmac_deployment_foundation.spec import ProductDeploymentSpec
 from dotmac_deployment_foundation.transition_receipt import (
     TRANSITION_RECEIPT_SCHEMA,
@@ -60,13 +68,15 @@ def _source(spec: ProductDeploymentSpec) -> TransitionSide:
 
 
 def _target_side(
-    spec: ProductDeploymentSpec, *, revision: str = "a" * 40
+    spec: ProductDeploymentSpec, *, revision: str | None = None
 ) -> TargetSide:
     return TargetSide(
         descriptor_sha256=_descriptor_digest(spec),
         migration_heads=tuple(spec.migration.expected_heads),
         image_digest=spec.image_digest,
-        image_source_revision=revision,
+        image_source_revision=(
+            revision if revision is not None else spec.source_revision
+        ),
     )
 
 
@@ -486,7 +496,7 @@ def test_a_head_omission_is_refused() -> None:
             descriptor_sha256=_descriptor_digest(spec),
             migration_heads=(),
             image_digest=spec.image_digest,
-            image_source_revision="a" * 40,
+            image_source_revision=spec.source_revision,
         ),
     )
     verdict = _verify(spec, receipt)
@@ -505,7 +515,7 @@ def test_an_extra_head_is_refused() -> None:
             descriptor_sha256=_descriptor_digest(spec),
             migration_heads=extra_heads,
             image_digest=spec.image_digest,
-            image_source_revision="a" * 40,
+            image_source_revision=spec.source_revision,
         ),
     )
     verdict = _verify(spec, receipt)
@@ -550,7 +560,7 @@ def test_a_declared_head_the_host_did_not_report_is_refused() -> None:
             descriptor_sha256=_descriptor_digest(spec),
             migration_heads=declared,
             image_digest=spec.image_digest,
-            image_source_revision="a" * 40,
+            image_source_revision=spec.source_revision,
         ),
     )
     # observed matches declared (so DECLARED_VS_SPEC also fires, but the
@@ -632,7 +642,7 @@ def test_a_descriptor_mismatch_is_refused() -> None:
             descriptor_sha256="sha256:" + "3" * 64,
             migration_heads=tuple(spec.migration.expected_heads),
             image_digest=spec.image_digest,
-            image_source_revision="a" * 40,
+            image_source_revision=spec.source_revision,
         ),
     )
     verdict = _verify(spec, receipt)
@@ -671,7 +681,7 @@ def test_an_image_not_matching_the_descriptor_is_refused() -> None:
             descriptor_sha256=_descriptor_digest(spec),
             migration_heads=tuple(spec.migration.expected_heads),
             image_digest=other_digest,
-            image_source_revision="a" * 40,
+            image_source_revision=spec.source_revision,
         ),
     )
     # observed matches the receipt's (wrong) image so only the descriptor
@@ -703,6 +713,32 @@ def test_a_malformed_observed_image_digest_is_a_finding_not_an_exception() -> No
     assert TransitionFinding.OBSERVED_IMAGE_MALFORMED not in verdict_ok.findings
 
 
+def test_a_bare_hex_observed_image_digest_is_malformed_not_normalized() -> None:
+    """`observed_image_digest` is held to the same canonical-only rule as
+    `parse()` -- a bare-hex spelling is refused, not silently prefixed."""
+    spec = _spec()
+    receipt = _receipt(spec)
+    bare = spec.image_digest.split(":", 1)[1]
+    verdict = _verify(spec, receipt, observed_image_digest=bare)
+    assert TransitionFinding.OBSERVED_IMAGE_MALFORMED in verdict.findings
+    assert TransitionFinding.IMAGE_DIGEST_MISMATCH not in verdict.findings
+
+    verdict_ok = _verify(spec, receipt)
+    assert TransitionFinding.OBSERVED_IMAGE_MALFORMED not in verdict_ok.findings
+
+
+def test_an_uppercase_observed_image_digest_is_malformed_not_normalized() -> None:
+    spec = _spec()
+    receipt = _receipt(spec)
+    upper = spec.image_digest.upper()
+    verdict = _verify(spec, receipt, observed_image_digest=upper)
+    assert TransitionFinding.OBSERVED_IMAGE_MALFORMED in verdict.findings
+    assert TransitionFinding.IMAGE_DIGEST_MISMATCH not in verdict.findings
+
+    verdict_ok = _verify(spec, receipt)
+    assert TransitionFinding.OBSERVED_IMAGE_MALFORMED not in verdict_ok.findings
+
+
 def test_a_bad_revision_is_refused() -> None:
     spec = _spec()
     receipt = _receipt(spec, target_side=_target_side(spec, revision="not-a-git-sha"))
@@ -711,6 +747,23 @@ def test_a_bad_revision_is_refused() -> None:
 
     verdict_ok = _verify(spec, _receipt(spec))
     assert TransitionFinding.IMAGE_REVISION_INVALID not in verdict_ok.findings
+
+
+def test_a_revision_not_matching_the_descriptor_is_refused() -> None:
+    """A well-formed 40-hex revision that simply isn't the one the descriptor
+    names -- distinct from `IMAGE_REVISION_INVALID`, which is about shape."""
+    spec = _spec()
+    other_revision = "b" * 40
+    assert other_revision != spec.source_revision
+    receipt = _receipt(spec, target_side=_target_side(spec, revision=other_revision))
+    verdict = _verify(spec, receipt)
+    assert TransitionFinding.IMAGE_REVISION_DESCRIPTOR_MISMATCH in verdict.findings
+    assert TransitionFinding.IMAGE_REVISION_INVALID not in verdict.findings
+
+    verdict_ok = _verify(spec, _receipt(spec))
+    assert (
+        TransitionFinding.IMAGE_REVISION_DESCRIPTOR_MISMATCH not in verdict_ok.findings
+    )
 
 
 def test_a_product_mismatch_is_refused() -> None:
@@ -938,23 +991,103 @@ def test_an_unsupported_checksum_algorithm_is_refused() -> None:
     assert TransitionFinding.BACKUP_ALGORITHM_UNSUPPORTED not in verdict_ok.findings
 
 
-def test_a_backup_record_shaped_like_an_external_receipt_is_refused() -> None:
-    """A record built (or shaped identically to one built) by
-    `external_recovery.backup_record_from_receipt` names an executor and a
-    restore duration, not a real artefact id and byte count -- refused rather
-    than treated as a bound backup."""
+def test_an_uppercase_bundle_digest_is_malformed() -> None:
+    """Existing producers spell a checksum as bare LOWERCASE hex (see
+    `external_recovery.py`, `backup.py`'s own tests) -- uppercase is refused,
+    not normalized."""
     spec = _spec()
-    external_path = f"{EXTERNAL_BACKUP_PATH_PREFIX}some-executor"
-    receipt = _receipt(spec, backup=_backup(bundle_id=external_path))
+    receipt = _receipt(
+        spec,
+        backup=TransitionBackup(
+            bundle_digest="DEADBEEF" * 8,
+            checksum_algorithm="sha256",
+            size_bytes=1_000_000,
+            bundle_id=_BACKUP_PATH,
+        ),
+    )
     record = BackupRecord(
         dataset="starter-db",
-        path=external_path,
-        size_bytes=receipt.backup.size_bytes,
-        checksum=receipt.backup.bundle_digest,
-        checksum_algorithm=receipt.backup.checksum_algorithm,
+        path=_BACKUP_PATH,
+        size_bytes=1_000_000,
+        checksum="DEADBEEF" * 8,
+        checksum_algorithm="sha256",
         completed_at_epoch=1_700_000_000,
         assurance=Assurance.PROVED,
         artefact_class=ArtefactClass.RECOVERY_BUNDLE,
+    )
+    verdict = _verify(spec, receipt, backup_record=record)
+    assert TransitionFinding.BACKUP_DIGEST_MALFORMED in verdict.findings
+
+    verdict_ok = _verify(spec, _receipt(spec))
+    assert TransitionFinding.BACKUP_DIGEST_MALFORMED not in verdict_ok.findings
+
+
+def test_a_wrong_length_bundle_digest_is_malformed() -> None:
+    """Survivor-killer: correct algorithm, correct alphabet, wrong length."""
+    spec = _spec()
+    receipt = _receipt(
+        spec,
+        backup=TransitionBackup(
+            bundle_digest="deadbeef" * 4,  # 32 hex chars, sha256 needs 64
+            checksum_algorithm="sha256",
+            size_bytes=1_000_000,
+            bundle_id=_BACKUP_PATH,
+        ),
+    )
+    record = BackupRecord(
+        dataset="starter-db",
+        path=_BACKUP_PATH,
+        size_bytes=1_000_000,
+        checksum="deadbeef" * 4,
+        checksum_algorithm="sha256",
+        completed_at_epoch=1_700_000_000,
+        assurance=Assurance.PROVED,
+        artefact_class=ArtefactClass.RECOVERY_BUNDLE,
+    )
+    verdict = _verify(spec, receipt, backup_record=record)
+    assert TransitionFinding.BACKUP_DIGEST_MALFORMED in verdict.findings
+
+    verdict_ok = _verify(spec, _receipt(spec))
+    assert TransitionFinding.BACKUP_DIGEST_MALFORMED not in verdict_ok.findings
+
+
+def test_a_record_built_by_backup_record_from_receipt_is_refused() -> None:
+    """Exactly the shape `engine/run.py` builds: `backup_record_from_receipt`
+    called with `path=f"{EXTERNAL_BACKUP_PATH_PREFIX}{executor.identifier}"`
+    and `size_bytes=max(1, restore_duration_seconds)` -- an executor
+    identifier and a restore duration, not a real artefact id and size."""
+    spec = _spec()
+    external_receipt = ExternalRecoveryReceiptV1(
+        identity=DatasetIdentityV1(
+            product=spec.product, dataset="starter-db", lineage="lineage-1"
+        ),
+        descriptor_digest=_descriptor_digest(spec),
+        snapshot_checksum="deadbeef" * 8,
+        snapshot_checksum_algorithm="sha256",
+        executor=ExternalExecutorV1(
+            kind="backup_platform",
+            identifier="some-executor",
+            version="1.0.0",
+            key_id="unattributed-key-id",
+        ),
+        verifications=("schema",),
+        isolated_target=True,
+        proved_at_epoch=1_700_000_000,
+        restore_duration_seconds=42,
+    )
+    record = backup_record_from_receipt(
+        external_receipt,
+        path=f"{EXTERNAL_BACKUP_PATH_PREFIX}{external_receipt.executor.identifier}",
+        size_bytes=max(1, external_receipt.restore_duration_seconds),
+    )
+    receipt = _receipt(
+        spec,
+        backup=TransitionBackup(
+            bundle_digest=record.checksum,
+            checksum_algorithm=record.checksum_algorithm,
+            size_bytes=record.size_bytes,
+            bundle_id=record.path,
+        ),
     )
     verdict = _verify(spec, receipt, backup_record=record)
     assert TransitionFinding.BACKUP_RECORD_NOT_ARTEFACT_BOUND in verdict.findings
@@ -1352,13 +1485,3 @@ def test_a_second_golden_vector_pins_non_ascii_and_a_chained_digest() -> None:
     assert receipt.canonical_bytes() == expected_canonical_bytes
     assert str(receipt.digest()) == expected_digest
     assert receipt.as_mapping() == document
-
-
-def test_the_checksum_allowlist_mirrors_the_dataset_contract() -> None:
-    """The verifier keeps its own copy so the module need not import `spec.py`;
-    this is what keeps that copy honest. A new dataset algorithm fails here
-    until the receipt verifier decides whether to accept it."""
-    from dotmac_deployment_foundation import transition_receipt
-    from dotmac_deployment_foundation.spec import BackupDataset
-
-    assert transition_receipt._ALLOWED_CHECKSUM_ALGORITHMS == BackupDataset.CHECKSUMS

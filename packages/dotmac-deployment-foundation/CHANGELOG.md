@@ -23,23 +23,38 @@ anchoring a chain's first receipt to a caller-named source instead of
 trusting the receipt's own claim. A chain is scoped to one product,
 environment and target (`CHAIN_SCOPE_MISMATCH`); the run that produced a
 receipt must match what the caller actually launched and must not repeat a
-predecessor's run id (`RUN_ID_MISMATCH`/`RUN_ID_REUSED`); a backup's
-`bundle_id` binds to `BackupRecord.path` (`BACKUP_ID_MISMATCH`), its
-`checksum_algorithm` is restricted to `{sha256, sha512}`
-(`BACKUP_ALGORITHM_UNSUPPORTED`), and a record shaped like one built by
-`external_recovery.backup_record_from_receipt` (an executor identifier and a
-restore duration standing in for a real artefact id and byte count) is
-refused outright (`BACKUP_RECORD_NOT_ARTEFACT_BOUND`) rather than accepted
-on those stand-in values; the target image must match both the descriptor
-and the caller's own observation (`IMAGE_DESCRIPTOR_MISMATCH`/
-`IMAGE_DIGEST_MISMATCH`). Every digest-shaped field (`descriptor_sha256`,
-`image_digest`, `previous_receipt_digest`) and every migration head must
-already be canonical — `sha256:` plus 64 lowercase hex for a digest, no
-leading/trailing whitespace and non-empty for a head — `parse()` refuses
-rather than normalizes a differently-spelled input. Neither the verifier nor
-the parser coerces a malformed input to make it fit: a non-`int`
-`size_bytes`, a bare string or non-string element in `observed_target_heads`,
-and similar shape violations are findings, not silent casts.
+predecessor's run id (`RUN_ID_MISMATCH`/`RUN_ID_REUSED`).
+
+The target image must match the descriptor (`IMAGE_DESCRIPTOR_MISMATCH`),
+the caller's own observation (`IMAGE_DIGEST_MISMATCH`), and the caller's
+observation must itself already be canonical (`OBSERVED_IMAGE_MALFORMED` for
+a bare-hex, uppercase or padded spelling — never normalized). The image's
+source revision must be well-formed 40-lowercase-hex (`IMAGE_REVISION_INVALID`)
+AND match the descriptor's own `source_revision` (`IMAGE_REVISION_DESCRIPTOR_MISMATCH`)
+— a receipt is not evidence about which commit is running unless both hold.
+
+A backup's `bundle_id` binds to `BackupRecord.path` (`BACKUP_ID_MISMATCH`);
+its `checksum_algorithm` is restricted to `BackupDataset.CHECKSUMS`
+(`{sha256, sha512}`, imported directly from `spec.py` — `BACKUP_ALGORITHM_UNSUPPORTED`
+for anything else) and its `bundle_digest` must be lowercase hex of the
+length that algorithm implies, 64 or 128 (`BACKUP_DIGEST_MALFORMED`) — bare
+hex, unprefixed, matching the spelling every existing producer already uses.
+A record shaped like one built by `external_recovery
+.backup_record_from_receipt` (an executor identifier and a restore duration
+standing in for a real artefact id and byte count) is refused outright
+(`BACKUP_RECORD_NOT_ARTEFACT_BOUND`) rather than accepted on those stand-in
+values — and `backup_record_from_receipt` itself now refuses (`SpecError`) a
+`path` that does not carry the shared `EXTERNAL_BACKUP_PATH_PREFIX`, so its
+one caller (`engine/run.py`) cannot emit a record this detection would miss.
+
+Every digest-shaped field (`descriptor_sha256`, `image_digest`,
+`previous_receipt_digest`) and every migration head must already be
+canonical — `sha256:` plus 64 lowercase hex for a digest, no leading/trailing
+whitespace and non-empty for a head — `parse()` refuses rather than
+normalizes a differently-spelled input. Neither the verifier nor the parser
+coerces a malformed input to make it fit: a non-`int` `size_bytes`, a bare
+string or non-string element in `observed_target_heads`, and similar shape
+violations are findings, not silent casts.
 
 ### Gate-3 successor execution authority (candidate; not released)
 

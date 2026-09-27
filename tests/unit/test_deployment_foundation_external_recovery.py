@@ -38,6 +38,7 @@ from dotmac_deployment_foundation.backup import (
 from dotmac_deployment_foundation.engine.plan import Phase, StepKind, build_plan
 from dotmac_deployment_foundation.errors import PreconditionFailed, SpecError
 from dotmac_deployment_foundation.external_recovery import (
+    EXTERNAL_BACKUP_PATH_PREFIX,
     VERIFICATION_EVIDENCE,
     accept_external_recovery_receipt,
     backup_record_from_receipt,
@@ -616,6 +617,25 @@ def test_an_accepted_receipt_writes_the_timestamp_nothing_wrote(
     assert record.restore_proved_at_epoch == receipt.proved_at_epoch
 
 
+def test_a_non_prefixed_path_is_refused(
+    external_spec: ProductDeploymentSpec, dataset: BackupDataset
+) -> None:
+    """The prefix is enforced at the ONE producer, not merely documented: the
+    only caller of `backup_record_from_receipt` cannot emit a record that a
+    reader (`transition_receipt.py`) would fail to recognise as external."""
+    receipt = _accept(
+        external_spec, dataset, _envelope(_document(external_spec, dataset))
+    )
+    with pytest.raises(SpecError, match="must start with"):
+        backup_record_from_receipt(receipt, path="not-external", size_bytes=1)
+
+    # near miss: the conforming prefix is accepted
+    record = backup_record_from_receipt(
+        receipt, path=f"{EXTERNAL_BACKUP_PATH_PREFIX}x", size_bytes=1
+    )
+    assert record.path == f"{EXTERNAL_BACKUP_PATH_PREFIX}x"
+
+
 def test_the_restore_proof_window_now_refuses(
     external_spec: ProductDeploymentSpec, dataset: BackupDataset
 ) -> None:
@@ -977,9 +997,9 @@ def test_no_receipt_handling_module_hides_a_call_behind_dynamic_resolution() -> 
         for module, source in _receipt_modules().items()
         for line, api, scope in unresolvable_sites(source)
     ]
-    assert (
-        not offenders
-    ), f"unresolvable construct in receipt-handling code: {offenders}"
+    assert not offenders, (
+        f"unresolvable construct in receipt-handling code: {offenders}"
+    )
 
 
 @pytest.mark.parametrize(
