@@ -59,6 +59,11 @@ AGREEMENT_TERMINATED_V1: Final[str] = "agreement.terminated.v1"
 AGREEMENT_EXPIRED_V1: Final[str] = "agreement.expired.v1"
 AGREEMENT_REJECTED_V1: Final[str] = "agreement.rejected.v1"
 AGREEMENT_CANCELLED_V1: Final[str] = "agreement.cancelled.v1"
+#: Recording a withdrawal is NOT a lifecycle transition — `from_status` and
+#: `to_status` on the emitted history row are equal, and `agreements.status`
+#: never changes. The fact still needs its own type because a consumer of
+#: `agreement.approved.v1` must be told the approval it saw no longer stands.
+AGREEMENT_APPROVAL_WITHDRAWN_V1: Final[str] = "agreement.approval_withdrawn.v1"
 
 #: Every type this module can emit. A consumer building a subscription set reads
 #: this rather than a hand-kept list that drifts, and the module's own test
@@ -76,6 +81,7 @@ PUBLISHED_EVENT_TYPES: Final[frozenset[str]] = frozenset(
         AGREEMENT_EXPIRED_V1,
         AGREEMENT_REJECTED_V1,
         AGREEMENT_CANCELLED_V1,
+        AGREEMENT_APPROVAL_WITHDRAWN_V1,
     }
 )
 
@@ -133,6 +139,9 @@ class AgreementView:
     supersedes_id: UUID | None = None
     superseded_by_id: UUID | None = None
     lines: tuple[PromisedLine, ...] = ()
+    #: True once ANY approval withdrawal has been recorded for this agreement.
+    #: Blocks approve, activate and reinstate — never a lifecycle status.
+    approval_withdrawn: bool = False
 
     @property
     def end_exclusive(self) -> date:
@@ -218,6 +227,9 @@ class AgreementDetail:
     permitted_actions: tuple[AgreementAction, ...]
     expected_version: int
     expected_status: str
+    #: Mirrors `agreement.approval_withdrawn` — carried here too so a surface
+    #: reading only the detail's own fields still sees it.
+    approval_withdrawn: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -268,9 +280,100 @@ class AgreementFilter:
             raise AgreementError("agreement page cursor must be a UUID or None")
 
 
+# ── Approval withdrawal: recorded as standing, never as a transition ────────
+
+
+@dataclass(frozen=True, slots=True)
+class RecordApprovalWithdrawalCommand:
+    """Record that an approval decision no longer stands.
+
+    Idempotently binds `approval_request_ref`, `approval_decision_ref`,
+    `policy_code`/`policy_version`, `subject_ref` and `content_hash` — every
+    field `service.record_approval_withdrawal` checks the evidence against
+    before writing anything. There is no `expected_version`: the command takes
+    the agreement row FOR UPDATE and decides from the evidence bound to it, not
+    from a version the caller last saw. It never changes `agreements.status`;
+    when it records, it bumps `record_version` once so a stale form holding the
+    old version is refused by the next transition.
+    """
+
+    command_id: str
+    agreement_id: UUID
+    approval_request_ref: str
+    approval_decision_ref: str
+    policy_code: str
+    policy_version: int
+    subject_ref: str
+    content_hash: str
+    withdrawal_ref: str
+    reason: str
+    withdrawn_at: datetime
+    actor_admin_id: UUID | None = None
+
+    def __post_init__(self) -> None:
+        for field, value in (
+            ("approval_request_ref", self.approval_request_ref),
+            ("approval_decision_ref", self.approval_decision_ref),
+            ("policy_code", self.policy_code),
+            ("subject_ref", self.subject_ref),
+            ("content_hash", self.content_hash),
+            ("withdrawal_ref", self.withdrawal_ref),
+            ("reason", self.reason),
+        ):
+            if not value or not value.strip():
+                raise AgreementError(f"approval withdrawal {field} must not be blank")
+        if self.withdrawn_at.tzinfo is None:
+            raise AgreementError(
+                "approval withdrawal withdrawn_at must be timezone-aware"
+            )
+        # The column bounds, checked here so an over-long value is a typed
+        # refusal at construction rather than a DataError at flush that would
+        # fail identically on every redelivery.
+        for field, value, limit in (
+            ("command_id", self.command_id, 200),
+            ("approval_request_ref", self.approval_request_ref, 200),
+            ("approval_decision_ref", self.approval_decision_ref, 200),
+            ("policy_code", self.policy_code, 120),
+            ("subject_ref", self.subject_ref, 200),
+            ("content_hash", self.content_hash, 64),
+            ("withdrawal_ref", self.withdrawal_ref, 200),
+        ):
+            if len(value) > limit:
+                raise AgreementError(
+                    f"approval withdrawal {field} exceeds {limit} characters"
+                )
+
+
+class ApprovalWithdrawalOutcome(StrEnum):
+    """A closed vocabulary of what recording a withdrawal actually did.
+
+    Only `RECORDED` and `ALREADY_RECORDED` write anything. The other three are
+    refusals: the command's own binding does not match what this module froze,
+    and no partial write happens on the way to reporting that.
+    """
+
+    RECORDED = "recorded"
+    ALREADY_RECORDED = "already_recorded"
+    DECISION_NOT_CARRIED = "decision_not_carried"
+    CONTENT_NOT_BOUND = "content_not_bound"
+    EVIDENCE_CONFLICT = "evidence_conflict"
+
+
+@dataclass(frozen=True, slots=True)
+class ApprovalWithdrawalResult:
+    """What `record_approval_withdrawal` decided, and whether it wrote."""
+
+    outcome: ApprovalWithdrawalOutcome
+    agreement_id: UUID
+    status: str
+    approval_carried: bool
+    withdrawal_id: UUID | None
+
+
 __all__ = [
     "AGREEMENT_ACTIVATED_V1",
     "AGREEMENT_AMENDED_V1",
+    "AGREEMENT_APPROVAL_WITHDRAWN_V1",
     "AGREEMENT_APPROVED_V1",
     "AGREEMENT_CANCELLED_V1",
     "AGREEMENT_EXPIRED_V1",
@@ -285,6 +388,9 @@ __all__ = [
     "AgreementFilter",
     "AgreementPage",
     "AgreementView",
+    "ApprovalWithdrawalOutcome",
+    "ApprovalWithdrawalResult",
     "PromisedLine",
+    "RecordApprovalWithdrawalCommand",
     "TransitionRecord",
 ]

@@ -689,7 +689,8 @@
           "dotmac_commercial_agreements/ports.py",
           "dotmac_commercial_agreements/service.py",
           "dotmac_commercial_agreements/migrations/__init__.py",
-          "dotmac_commercial_agreements/migrations/versions/cg_0001_agreements.py"
+          "dotmac_commercial_agreements/migrations/versions/cg_0001_agreements.py",
+          "dotmac_commercial_agreements/migrations/versions/cg_0002_approval_withdrawals.py"
         ],
         "forbidden_prefixes": [
           "app/",

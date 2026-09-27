@@ -63,13 +63,14 @@ from uuid import UUID, uuid4
 
 from dotmac_kernel.audit import write_platform_audit_event
 from dotmac_kernel.messaging import enqueue_platform_event, process_once_platform
-from sqlalchemy import select
+from sqlalchemy import literal, select
 from sqlalchemy.orm import Session, selectinload
 
 from dotmac_commercial_agreements import facts
 from dotmac_commercial_agreements.models import (
     TERMINAL_STATUSES,
     Agreement,
+    AgreementApprovalWithdrawal,
     AgreementEvent,
     AgreementLine,
     AgreementStatus,
@@ -97,6 +98,15 @@ from dotmac_commercial_agreements.ports import (
 #: vocabulary, not to encourage a code per verb.
 AUDIT_ACTION_TRANSITIONED: str = "commercial_agreement.transitioned"
 
+#: A SECOND, distinct audit action — deliberately not a member of the same
+#: vocabulary as `AUDIT_ACTION_TRANSITIONED`. A withdrawal is not a transition
+#: (it never advances `agreements.status`), and folding it into "transitioned"
+#: would make an auditor's search for actual transitions return a row that was
+#: never one.
+AUDIT_ACTION_APPROVAL_WITHDRAWAL_RECORDED: str = (
+    "commercial_agreement.approval_withdrawal_recorded"
+)
+
 #: Idempotency scopes name the OPERATION, never an HTTP route (ADR-0014).
 SCOPE_DRAFT = "commercial_agreement.draft"
 SCOPE_PROPOSE = "commercial_agreement.propose"
@@ -109,6 +119,7 @@ SCOPE_TERMINATE = "commercial_agreement.terminate"
 SCOPE_EXPIRE = "commercial_agreement.expire"
 SCOPE_CANCEL = "commercial_agreement.cancel"
 SCOPE_AMEND = "commercial_agreement.amend"
+SCOPE_RECORD_APPROVAL_WITHDRAWAL = "commercial_agreement.record_approval_withdrawal"
 
 _ENTITY = "commercial_agreement"
 
@@ -345,6 +356,22 @@ def _load(session: Session, agreement_id: UUID) -> Agreement:
     return row
 
 
+def _load_locked(session: Session, agreement_id: UUID) -> Agreement:
+    """The agreement row under FOR UPDATE, refreshed from the database.
+
+    Recording a withdrawal and the three transitions it blocks (approve,
+    activate, reinstate) serialize on this lock, so a transition can never
+    pass its no-withdrawal guard while a withdrawal for the same agreement is
+    committing. Without it both could read "no withdrawal" and both commit.
+    """
+    row = session.get(
+        Agreement, agreement_id, with_for_update=True, populate_existing=True
+    )
+    if row is None:
+        raise TransitionRefusedError(f"agreement {agreement_id} not found")
+    return row
+
+
 def _require_expected(
     row: Agreement, *, expected_status: str | None, expected_version: int | None
 ) -> None:
@@ -402,6 +429,42 @@ def _require_bound_approval(row: Agreement, evidence: ApprovalEvidence) -> None:
         )
 
 
+def _has_withdrawal(session: Session, agreement_id: UUID) -> bool:
+    """Whether ANY withdrawal has been recorded for this agreement.
+
+    An explicit `EXISTS`-shaped query in the CALLER's own session, never the
+    ORM `approval_withdrawals` collection — after a `FOR UPDATE` lock that
+    collection can be a stale cached list from before the lock was taken, and
+    a guard that trusted it could let a concurrent withdrawal go unseen.
+    """
+    return (
+        session.execute(
+            select(literal(1))
+            .where(AgreementApprovalWithdrawal.agreement_id == agreement_id)
+            .limit(1)
+        ).first()
+        is not None
+    )
+
+
+def _require_no_withdrawal(session: Session, row: Agreement) -> None:
+    """Refuse approve, activate and reinstate once ANY withdrawal is recorded.
+
+    A withdrawal never changes `agreements.status`, so it is invisible to
+    `_PERMITTED_FROM` — this is the one place those three transitions consult a
+    table their own status-based guard knows nothing about. It fires
+    regardless of WHICH withdrawal row exists or what it bound to: recording
+    one blocks re-approval outright, and the only supported path back is an
+    amended successor (`amend`), never a second approval on this row.
+    """
+    if _has_withdrawal(session, row.id):
+        raise TransitionRefusedError(
+            f"agreement {row.id} has a recorded approval withdrawal; approve, "
+            "activate and reinstate are refused — obtain a new approval "
+            "through an amended successor, never on the withdrawn row"
+        )
+
+
 def _next_sequence(session: Session, agreement_id: UUID) -> int:
     """The next dense per-agreement history sequence.
 
@@ -431,12 +494,20 @@ def _record(
     reason: str | None = None,
     evidence: Mapping[str, Any] | None = None,
     extra: Mapping[str, Any] | None = None,
+    audit_action: str = AUDIT_ACTION_TRANSITIONED,
 ) -> None:
     """The atomic consequence of a transition: history, audit, and outbox fact.
 
     All three, in the caller's transaction, or none. Writing the state change
     without the fact would leave a consumer permanently unaware; writing the
     fact without the history would leave an auditor unable to say why.
+
+    `audit_action` defaults to the one lifecycle-transition action every
+    transition writes. Recording an approval withdrawal is deliberately NOT a
+    transition (`from_status == to_status`, `agreements.status` never changes)
+    and writes `AUDIT_ACTION_APPROVAL_WITHDRAWAL_RECORDED` instead, so an
+    auditor searching for actual transitions never sees a withdrawal counted
+    as one.
     """
     actor_ref = str(actor_admin_id) if actor_admin_id is not None else None
     session.add(
@@ -470,7 +541,7 @@ def _record(
     write_platform_audit_event(
         session,
         actor_admin_id=actor_admin_id,
-        action=AUDIT_ACTION_TRANSITIONED,
+        action=audit_action,
         entity_type=_ENTITY,
         entity_id=str(row.id),
         details=details,
@@ -496,7 +567,7 @@ def _advance(row: Agreement, to: AgreementStatus) -> str:
     return previous
 
 
-def _view(row: Agreement) -> facts.AgreementView:
+def _view(session: Session, row: Agreement) -> facts.AgreementView:
     return facts.AgreementView(
         id=row.id,
         reference=row.reference,
@@ -517,6 +588,7 @@ def _view(row: Agreement) -> facts.AgreementView:
         activated_at=row.activated_at,
         supersedes_id=row.supersedes_id,
         superseded_by_id=row.superseded_by_id,
+        approval_withdrawn=_has_withdrawal(session, row.id),
         lines=tuple(
             facts.PromisedLine(
                 line_no=line.line_no,
@@ -612,7 +684,7 @@ def open_draft(
         command_type=SCOPE_DRAFT,
         handler=handler,
     )
-    return _view(_load(db, UUID(str(outcome.result["id"]))))
+    return _view(db, _load(db, UUID(str(outcome.result["id"]))))
 
 
 def propose(
@@ -676,7 +748,7 @@ def propose(
         command_type=SCOPE_PROPOSE,
         handler=handler,
     )
-    return _view(_load(db, command.agreement_id))
+    return _view(db, _load(db, command.agreement_id))
 
 
 def approve(db: Session, command: ApproveCommand) -> facts.AgreementView:
@@ -688,12 +760,13 @@ def approve(db: Session, command: ApproveCommand) -> facts.AgreementView:
     """
 
     def handler(session: Session) -> Mapping[str, object]:
-        row = _load(session, command.agreement_id)
+        row = _load_locked(session, command.agreement_id)
         _require_expected(
             row,
             expected_status=_sole_from(facts.AgreementAction.APPROVE),
             expected_version=command.expected_version,
         )
+        _require_no_withdrawal(session, row)
         _require_bound_approval(row, command.evidence)
         row.approval_decision_ref = command.evidence.decision_ref
         row.approved_at = command.evidence.decided_at
@@ -716,7 +789,7 @@ def approve(db: Session, command: ApproveCommand) -> facts.AgreementView:
         command_type=SCOPE_APPROVE,
         handler=handler,
     )
-    return _view(_load(db, command.agreement_id))
+    return _view(db, _load(db, command.agreement_id))
 
 
 def reject(db: Session, command: TransitionCommand) -> facts.AgreementView:
@@ -760,7 +833,7 @@ def reject(db: Session, command: TransitionCommand) -> facts.AgreementView:
         command_type=SCOPE_REJECT,
         handler=handler,
     )
-    return _view(_load(db, command.agreement_id))
+    return _view(db, _load(db, command.agreement_id))
 
 
 def activate(db: Session, command: ActivateCommand) -> facts.AgreementView:
@@ -777,13 +850,21 @@ def activate(db: Session, command: ActivateCommand) -> facts.AgreementView:
     """
 
     def handler(session: Session) -> Mapping[str, object]:
-        row = _load(session, command.agreement_id)
+        row = _load_locked(session, command.agreement_id)
         _require_expected(
             row,
             expected_status=_sole_from(facts.AgreementAction.ACTIVATE),
             expected_version=command.expected_version,
         )
+        _require_no_withdrawal(session, row)
         _require_bound_approval(row, command.approval_evidence)
+        if command.approval_evidence.decision_ref != row.approval_decision_ref:
+            raise EvidenceRefusedError(
+                f"activation evidence names decision "
+                f"{command.approval_evidence.decision_ref!r} but agreement "
+                f"{row.id} was approved under {row.approval_decision_ref!r}; "
+                "activation requires the SAME decision that carried approval"
+            )
         if not command.activation_evidence.rule.strip():
             raise EvidenceRefusedError(
                 f"agreement {row.id} cannot activate without a named activation "
@@ -827,7 +908,7 @@ def activate(db: Session, command: ActivateCommand) -> facts.AgreementView:
         command_type=SCOPE_ACTIVATE,
         handler=handler,
     )
-    return _view(_load(db, command.agreement_id))
+    return _view(db, _load(db, command.agreement_id))
 
 
 def suspend(db: Session, command: TransitionCommand) -> facts.AgreementView:
@@ -857,6 +938,7 @@ def reinstate(db: Session, command: TransitionCommand) -> facts.AgreementView:
         allowed=_from_states(facts.AgreementAction.REINSTATE),
         to=AgreementStatus.ACTIVE,
         event_type=facts.AGREEMENT_REINSTATED_V1,
+        requires_approval_standing=True,
     )
 
 
@@ -914,7 +996,7 @@ def terminate(db: Session, command: TerminateCommand) -> facts.AgreementView:
         command_type=SCOPE_TERMINATE,
         handler=handler,
     )
-    return _view(_load(db, command.agreement_id))
+    return _view(db, _load(db, command.agreement_id))
 
 
 def expire(
@@ -965,7 +1047,7 @@ def expire(
         command_type=SCOPE_EXPIRE,
         handler=handler,
     )
-    return _view(_load(db, command.agreement_id))
+    return _view(db, _load(db, command.agreement_id))
 
 
 def amend(
@@ -1050,7 +1132,244 @@ def amend(
         command_type=SCOPE_AMEND,
         handler=handler,
     )
-    return _view(_load(db, UUID(str(outcome.result["id"]))))
+    return _view(db, _load(db, UUID(str(outcome.result["id"]))))
+
+
+#: The bound fields `RecordApprovalWithdrawalCommand` idempotently binds, in
+#: the exact order the docstring names them. Used both to detect a conflicting
+#: replay of the same `withdrawal_ref` and to freeze the row.
+_WITHDRAWAL_BOUND_FIELDS: Final[tuple[str, ...]] = (
+    "approval_request_ref",
+    "approval_decision_ref",
+    "approval_policy_code",
+    "approval_policy_version",
+    "subject_ref",
+    "content_hash",
+)
+
+
+def _same_instant(stored: datetime, supplied: datetime) -> bool:
+    """Compare two times as instants. The command guarantees `supplied` is
+    timezone-aware; a driver that returns `timestamptz` naive (SQLite) is read
+    as UTC, the zone every stored value is written in."""
+    if stored.tzinfo is None:
+        stored = stored.replace(tzinfo=UTC)
+    return stored == supplied
+
+
+def record_approval_withdrawal(
+    db: Session, command: facts.RecordApprovalWithdrawalCommand
+) -> facts.ApprovalWithdrawalResult:
+    """Record that an approval decision no longer stands, as STANDING.
+
+    Never a transition: `agreements.status` never changes. Recording bumps
+    `record_version` once, so a stale form holding the old version gets
+    `ExpectedStateError`, and writes one history row with
+    `from_status == to_status`. What blocks re-approval is
+    `_require_no_withdrawal`, consulted by `approve`, `activate` and
+    `reinstate` under the same row lock this function takes.
+
+    The decision is made UNDER the agreement row lock, in the caller's
+    transaction, BEFORE the at-most-once owner is involved. A refusal writes
+    nothing at all — no withdrawal row, no history, and no idempotency ledger
+    entry — so a refusal that depends on the row's current state (e.g.
+    `content_not_bound` while the row is still a draft) is re-decided on every
+    delivery instead of being frozen under the command id. Only a RECORD goes
+    through `process_once_platform`; an identical replay of an already-recorded
+    withdrawal is recognised by its `withdrawal_ref` and returns
+    `already_recorded` without writing.
+
+    Checks, in order:
+
+    1. A withdrawal already recorded under the same `withdrawal_ref`: an
+       identical binding (and the same reason and time) is `ALREADY_RECORDED`,
+       any difference is `EVIDENCE_CONFLICT`. Checked FIRST, against the stored
+       withdrawal only, so a replay never depends on mutable row state.
+    2. `subject_ref` must name this agreement, and a policy code/version frozen
+       on the row must match — otherwise `EVIDENCE_CONFLICT`.
+    2b. A withdrawal already recorded for the same (agreement, decision) under a
+       DIFFERENT reference is `EVIDENCE_CONFLICT` (Approvals records one
+       withdrawal per request).
+    3. The command's decision matches the row's → RECORD with
+       `approval_carried=True` in any status — provided the command's digest
+       equals the digest this module froze; a contradicting digest is
+       `EVIDENCE_CONFLICT`, never written into append-only evidence.
+    4. No decision bound and the row is `draft`/`proposed`: matching digest →
+       RECORD with `approval_carried=False` (blocks the first approval on this
+       row); otherwise `CONTENT_NOT_BOUND`.
+    5. A different decision is bound → `DECISION_NOT_CARRIED`.
+    """
+    row = _load_locked(db, command.agreement_id)
+
+    def _result(
+        outcome: facts.ApprovalWithdrawalOutcome,
+        *,
+        approval_carried: bool = False,
+        withdrawal_id: UUID | None = None,
+    ) -> facts.ApprovalWithdrawalResult:
+        return facts.ApprovalWithdrawalResult(
+            outcome=outcome,
+            agreement_id=row.id,
+            status=row.status,
+            approval_carried=approval_carried,
+            withdrawal_id=withdrawal_id,
+        )
+
+    conflict = facts.ApprovalWithdrawalOutcome.EVIDENCE_CONFLICT
+
+    # 1. A prior withdrawal under the same reference: replay or conflict.
+    # First, and against the STORED withdrawal only — never against mutable
+    # row state (reject + re-propose can change the row's policy), so an
+    # identical redelivery always replays as `already_recorded`.
+    existing = db.execute(
+        select(AgreementApprovalWithdrawal).where(
+            AgreementApprovalWithdrawal.withdrawal_ref == command.withdrawal_ref
+        )
+    ).scalar_one_or_none()
+    if existing is not None:
+        bound_command = {
+            "approval_request_ref": command.approval_request_ref,
+            "approval_decision_ref": command.approval_decision_ref,
+            "approval_policy_code": command.policy_code,
+            "approval_policy_version": command.policy_version,
+            "subject_ref": command.subject_ref,
+            "content_hash": command.content_hash,
+        }
+        identical = (
+            existing.agreement_id == row.id
+            and all(
+                getattr(existing, field) == bound_command[field]
+                for field in _WITHDRAWAL_BOUND_FIELDS
+            )
+            # Approvals' withdrawal record is immutable, so the same reference
+            # with a different reason or time is contradictory evidence too.
+            and existing.reason == command.reason
+            and _same_instant(existing.withdrawn_at, command.withdrawn_at)
+        )
+        if not identical:
+            return _result(conflict)
+        return _result(
+            facts.ApprovalWithdrawalOutcome.ALREADY_RECORDED,
+            approval_carried=existing.approval_carried,
+            withdrawal_id=existing.id,
+        )
+
+    # 2. Subject and frozen-policy binding.
+    if command.subject_ref != str(row.id):
+        return _result(conflict)
+    if (
+        row.approval_policy_code is not None
+        and row.approval_policy_code != command.policy_code
+    ) or (
+        row.approval_policy_version is not None
+        and row.approval_policy_version != command.policy_version
+    ):
+        return _result(conflict)
+
+    # 2b. One withdrawal per (agreement, decision).
+    same_decision = db.execute(
+        select(AgreementApprovalWithdrawal.id).where(
+            AgreementApprovalWithdrawal.agreement_id == row.id,
+            AgreementApprovalWithdrawal.approval_decision_ref
+            == command.approval_decision_ref,
+        )
+    ).first()
+    if same_decision is not None:
+        return _result(conflict)
+
+    # 3-5. Did the withdrawn decision carry this row's approval?
+    if row.approval_decision_ref == command.approval_decision_ref:
+        if row.content_hash is not None and row.content_hash != command.content_hash:
+            return _result(conflict)
+        approval_carried = True
+    elif row.approval_decision_ref is None and row.status in (
+        AgreementStatus.DRAFT.value,
+        AgreementStatus.PROPOSED.value,
+    ):
+        if row.content_hash is None or row.content_hash != command.content_hash:
+            return _result(facts.ApprovalWithdrawalOutcome.CONTENT_NOT_BOUND)
+        approval_carried = False
+    else:
+        return _result(facts.ApprovalWithdrawalOutcome.DECISION_NOT_CARRIED)
+
+    def handler(session: Session) -> Mapping[str, object]:
+        withdrawal = AgreementApprovalWithdrawal(
+            agreement_id=row.id,
+            approval_request_ref=command.approval_request_ref,
+            approval_decision_ref=command.approval_decision_ref,
+            approval_policy_code=command.policy_code,
+            approval_policy_version=command.policy_version,
+            subject_ref=command.subject_ref,
+            content_hash=command.content_hash,
+            withdrawal_ref=command.withdrawal_ref,
+            reason=command.reason,
+            withdrawn_at=command.withdrawn_at,
+            status_at_record=row.status,
+            approval_carried=approval_carried,
+            command_id=command.command_id,
+            actor_ref=(
+                str(command.actor_admin_id)
+                if command.actor_admin_id is not None
+                else None
+            ),
+        )
+        session.add(withdrawal)
+        row.record_version += 1
+        session.flush()
+        _record(
+            session,
+            row,
+            command_id=command.command_id,
+            event_type=facts.AGREEMENT_APPROVAL_WITHDRAWN_V1,
+            from_status=row.status,
+            actor_admin_id=command.actor_admin_id,
+            reason=command.reason,
+            evidence={
+                "approval_request_ref": command.approval_request_ref,
+                "approval_decision_ref": command.approval_decision_ref,
+                "approval_policy_code": command.policy_code,
+                "approval_policy_version": command.policy_version,
+                "subject_ref": command.subject_ref,
+                "content_hash": command.content_hash,
+                "withdrawal_ref": command.withdrawal_ref,
+                "withdrawal_id": str(withdrawal.id),
+                "approval_carried": approval_carried,
+            },
+            audit_action=AUDIT_ACTION_APPROVAL_WITHDRAWAL_RECORDED,
+        )
+        return {
+            "outcome": facts.ApprovalWithdrawalOutcome.RECORDED.value,
+            "agreement_id": str(row.id),
+            "withdrawal_ref": command.withdrawal_ref,
+            "approval_carried": approval_carried,
+            "withdrawal_id": str(withdrawal.id),
+        }
+
+    outcome = process_once_platform(
+        db,
+        command_id=command.command_id,
+        command_type=SCOPE_RECORD_APPROVAL_WITHDRAWAL,
+        handler=handler,
+    )
+    result = outcome.result or {}
+    # The ledger keys on command_id alone (this kernel's process_once_platform
+    # takes no fingerprint), so a replay can only be trusted if it is THIS
+    # command's record. A reused id — from another command, or for another
+    # agreement or withdrawal — is refused rather than reported as recorded.
+    if (
+        result.get("outcome") != facts.ApprovalWithdrawalOutcome.RECORDED.value
+        or result.get("agreement_id") != str(row.id)
+        or result.get("withdrawal_ref") != command.withdrawal_ref
+    ):
+        raise TransitionRefusedError(
+            f"command id {command.command_id!r} was already used for a different "
+            "command; an approval withdrawal needs its own command id"
+        )
+    return _result(
+        facts.ApprovalWithdrawalOutcome.RECORDED,
+        approval_carried=bool(result["approval_carried"]),
+        withdrawal_id=UUID(str(result["withdrawal_id"])),
+    )
 
 
 # ── Reads ───────────────────────────────────────────────────────────────────
@@ -1058,7 +1377,7 @@ def amend(
 
 def get(db: Session, agreement_id: UUID) -> facts.AgreementView | None:
     row = db.get(Agreement, agreement_id)
-    return _view(row) if row is not None else None
+    return _view(db, row) if row is not None else None
 
 
 def history(db: Session, agreement_id: UUID) -> tuple[facts.TransitionRecord, ...]:
@@ -1098,10 +1417,12 @@ def family(db: Session, agreement_family_id: UUID) -> tuple[facts.AgreementView,
         .scalars()
         .all()
     )
-    return tuple(_view(row) for row in rows)
+    return tuple(_view(db, row) for row in rows)
 
 
-def _permitted_actions(row: Agreement) -> tuple[facts.AgreementAction, ...]:
+def _permitted_actions(
+    session: Session, row: Agreement
+) -> tuple[facts.AgreementAction, ...]:
     """What may legally be done to this agreement next, decided by the owner.
 
     Read from `_PERMITTED_FROM`, the SAME table the write guards enforce, plus
@@ -1115,7 +1436,13 @@ def _permitted_actions(row: Agreement) -> tuple[facts.AgreementAction, ...]:
     to. Reaching `proposed` is what freezes it, so the check is defensive rather
     than load-bearing — but a row that somehow lacked one would otherwise be
     offered an approval `_require_bound_approval` must then refuse.
+
+    `APPROVE`, `ACTIVATE` and `REINSTATE` are additionally withdrawn once
+    `_has_withdrawal` is true — the same condition `_require_no_withdrawal`
+    refuses on, read here instead of enforced, so a screen never offers a
+    button the write path would reject.
     """
+    withdrawn = _has_withdrawal(session, row.id)
     actions: list[facts.AgreementAction] = []
     for action, sources in _PERMITTED_FROM.items():
         if row.status not in sources:
@@ -1125,6 +1452,16 @@ def _permitted_actions(row: Agreement) -> tuple[facts.AgreementAction, ...]:
         if action is facts.AgreementAction.APPROVE and not row.content_hash:
             continue
         if action is facts.AgreementAction.AMEND and row.superseded_by_id is not None:
+            continue
+        if (
+            action
+            in (
+                facts.AgreementAction.APPROVE,
+                facts.AgreementAction.ACTIVATE,
+                facts.AgreementAction.REINSTATE,
+            )
+            and withdrawn
+        ):
             continue
         actions.append(action)
     return tuple(actions)
@@ -1143,11 +1480,12 @@ def detail(db: Session, agreement_id: UUID) -> facts.AgreementDetail | None:
     if row is None:
         return None
     return facts.AgreementDetail(
-        agreement=_view(row),
+        agreement=_view(db, row),
         timeline=history(db, agreement_id),
-        permitted_actions=_permitted_actions(row),
+        permitted_actions=_permitted_actions(db, row),
         expected_version=row.record_version,
         expected_status=row.status,
+        approval_withdrawn=_has_withdrawal(db, row.id),
     )
 
 
@@ -1214,7 +1552,7 @@ def list_agreements(
     rows = tuple(db.execute(statement).scalars().all())
     page_rows = rows[:limit]
     return facts.AgreementPage(
-        items=tuple(_view(row) for row in page_rows),
+        items=tuple(_view(db, row) for row in page_rows),
         next_after=page_rows[-1].id if len(rows) > limit else None,
     )
 
@@ -1255,17 +1593,26 @@ def _simple(
     to: AgreementStatus,
     event_type: str,
     reason_field: str | None = None,
+    requires_approval_standing: bool = False,
 ) -> facts.AgreementView:
-    """A transition whose only guard is the status it comes from."""
+    """A transition whose only guard is the status it comes from — plus, for
+    `reinstate`, standing approval: `requires_approval_standing` locks the row
+    and refuses once a withdrawal is recorded."""
 
     def handler(session: Session) -> Mapping[str, object]:
-        row = _load(session, command.agreement_id)
+        row = (
+            _load_locked(session, command.agreement_id)
+            if requires_approval_standing
+            else _load(session, command.agreement_id)
+        )
         _require_expected(
             row,
             expected_status=command.expected_status,
             expected_version=command.expected_version,
         )
         _require_status(row, allowed)
+        if requires_approval_standing:
+            _require_no_withdrawal(session, row)
         if reason_field is not None:
             setattr(row, reason_field, command.reason)
         row.last_reason = command.reason
@@ -1285,7 +1632,7 @@ def _simple(
     process_once_platform(
         db, command_id=command.command_id, command_type=scope, handler=handler
     )
-    return _view(_load(db, command.agreement_id))
+    return _view(db, _load(db, command.agreement_id))
 
 
 #: Kept for callers that want the module's clock in one place rather than
@@ -1297,6 +1644,7 @@ def _now() -> datetime:
 
 
 __all__ = [
+    "AUDIT_ACTION_APPROVAL_WITHDRAWAL_RECORDED",
     "AUDIT_ACTION_TRANSITIONED",
     "DEFAULT_AGREEMENT_PAGE_SIZE",
     "MAX_AGREEMENT_PAGE_SIZE",
@@ -1307,6 +1655,7 @@ __all__ = [
     "SCOPE_DRAFT",
     "SCOPE_EXPIRE",
     "SCOPE_PROPOSE",
+    "SCOPE_RECORD_APPROVAL_WITHDRAWAL",
     "SCOPE_REINSTATE",
     "SCOPE_REJECT",
     "SCOPE_SUSPEND",
@@ -1331,6 +1680,7 @@ __all__ = [
     "list_agreements",
     "open_draft",
     "propose",
+    "record_approval_withdrawal",
     "reinstate",
     "reject",
     "snapshot_digest",

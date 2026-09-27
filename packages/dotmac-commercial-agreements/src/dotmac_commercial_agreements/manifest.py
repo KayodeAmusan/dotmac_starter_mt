@@ -78,13 +78,13 @@ from dotmac_kernel.product_database_catalog import (
     PostgresTypeKind,
 )
 
-# Transcribed verbatim from `observe_postgres_tables_columns(conn,
-# schemas=("mod_agreements",))` against a disposable PostgreSQL 16 database
-# composed from the kernel lineage + this assembly + this module's own
-# `cg_0001_agreements` migration, at exactly that composed head — never
-# hand-typed from reading the migration source. Self-verified against a fresh
-# observation of the same live database with
-# `compare_module_database_catalog(...).matched is True` before teardown.
+# The three `cg_0001_agreements` tables were transcribed verbatim from
+# `observe_postgres_tables_columns(conn, schemas=("mod_agreements",))` against a
+# disposable PostgreSQL 16 database at that composed head. The
+# `agreement_approval_withdrawals` table (`cg_0002_approval_withdrawals`) was
+# DRAFTED from its migration and is verified against a live observation by
+# `tests/test_commercial_agreements_platform_isolation.py` in CI — a
+# repository-local claim resting on that test, not on a local observation.
 _VARCHAR = "pg_catalog", "varchar"
 _UUID = "pg_catalog", "uuid"
 _INT4 = "pg_catalog", "int4"
@@ -92,6 +92,7 @@ _TEXT = "pg_catalog", "text"
 _JSONB = "pg_catalog", "jsonb"
 _DATE = "pg_catalog", "date"
 _TIMESTAMPTZ = "pg_catalog", "timestamptz"
+_BOOL = "pg_catalog", "bool"
 
 
 def _base_type(schema: str, name: str, formatted: str) -> PostgresTypeContractV1:
@@ -268,22 +269,101 @@ _AGREEMENTS = ModuleDatabaseTableContractV1(
     ),
 )
 
+_AGREEMENT_APPROVAL_WITHDRAWALS = ModuleDatabaseTableContractV1(
+    name="agreement_approval_withdrawals",
+    relation_kind=DatabaseRelationKind.TABLE,
+    columns=(
+        _column("id", 1, _UUID, "uuid", nullable=False),
+        _column("agreement_id", 2, _UUID, "uuid", nullable=False),
+        _column(
+            "approval_request_ref",
+            3,
+            _VARCHAR,
+            "character varying(200)",
+            nullable=False,
+        ),
+        _column(
+            "approval_decision_ref",
+            4,
+            _VARCHAR,
+            "character varying(200)",
+            nullable=False,
+        ),
+        _column(
+            "approval_policy_code",
+            5,
+            _VARCHAR,
+            "character varying(120)",
+            nullable=False,
+        ),
+        _column("approval_policy_version", 6, _INT4, "integer", nullable=False),
+        _column("subject_ref", 7, _VARCHAR, "character varying(200)", nullable=False),
+        _column("content_hash", 8, _VARCHAR, "character varying(64)", nullable=False),
+        _column(
+            "withdrawal_ref", 9, _VARCHAR, "character varying(200)", nullable=False
+        ),
+        _column("reason", 10, _TEXT, "text", nullable=False),
+        _column(
+            "withdrawn_at",
+            11,
+            _TIMESTAMPTZ,
+            "timestamp with time zone",
+            nullable=False,
+        ),
+        _column(
+            "status_at_record", 12, _VARCHAR, "character varying(24)", nullable=False
+        ),
+        _column("approval_carried", 13, _BOOL, "boolean", nullable=False),
+        _column("command_id", 14, _VARCHAR, "character varying(200)", nullable=False),
+        _column("actor_ref", 15, _VARCHAR, "character varying(200)", nullable=True),
+        _column(
+            "created_at",
+            16,
+            _TIMESTAMPTZ,
+            "timestamp with time zone",
+            nullable=False,
+            generated_now=True,
+        ),
+        _column(
+            "updated_at",
+            17,
+            _TIMESTAMPTZ,
+            "timestamp with time zone",
+            nullable=False,
+            generated_now=True,
+        ),
+    ),
+)
+
 database_catalog = ModuleDatabaseCatalogContributionV1(
-    lineage_head="cg_0001_agreements",
-    tables=(_AGREEMENT_EVENTS, _AGREEMENT_LINES, _AGREEMENTS),
+    lineage_head="cg_0002_approval_withdrawals",
+    tables=(
+        _AGREEMENT_APPROVAL_WITHDRAWALS,
+        _AGREEMENT_EVENTS,
+        _AGREEMENT_LINES,
+        _AGREEMENTS,
+    ),
 )
 
 module = ModuleManifest(
     code="commercial_agreements",
-    version="0.1.0a3",
+    version="0.1.0a4",
     core=False,
     short_code="agreements",
     migration_prefix="cg",
     migration_branch="commercial_agreements",
     tables=(),
-    platform_tables=("agreements", "agreement_lines", "agreement_events"),
+    platform_tables=(
+        "agreements",
+        "agreement_lines",
+        "agreement_events",
+        "agreement_approval_withdrawals",
+    ),
     requires=(IDEMPOTENCY_LEDGER_V1.name, PLATFORM_AUDIT_LOG_V1.name),
-    audit_actions=("commercial_agreement.transitioned",),
+    audit_actions=(
+        "commercial_agreement.transitioned",
+        "commercial_agreement.approval_withdrawal_recorded",
+    ),
     database_catalog=database_catalog,
 )
 

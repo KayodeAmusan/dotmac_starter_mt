@@ -109,12 +109,18 @@ class TestTheManifestMatchesTheLedger:
 class TestThePlaneIsDeclaredNotDiscovered:
     def test_the_tenant_plane_is_empty_and_the_platform_plane_is_not(self) -> None:
         """ADR-0023 rejects inferring a plane from a missing `tenant_id`, and
-        ADR-0057 § 7 derives this one from the single consumer that exists."""
+        ADR-0057 § 7 derives this one from the single consumer that exists.
+
+        a4 adds `agreement_approval_withdrawals` (`cg_0002_approval_withdrawals`)
+        as a fourth platform table — a withdrawal is a control-plane fact with no
+        `tenant_id` to scope by, same reasoning as the original three.
+        """
         assert module.tables == ()
         assert set(module.platform_tables) == {
             "agreements",
             "agreement_lines",
             "agreement_events",
+            "agreement_approval_withdrawals",
         }
 
     def test_the_declared_tables_are_exactly_the_mapped_ones(self) -> None:
@@ -123,18 +129,20 @@ class TestThePlaneIsDeclaredNotDiscovered:
         from dotmac_commercial_agreements.models import (
             SCHEMA,
             Agreement,
+            AgreementApprovalWithdrawal,
             AgreementEvent,
             AgreementLine,
         )
 
-        mapped = {
-            model.__tablename__ for model in (Agreement, AgreementLine, AgreementEvent)
-        }
-        assert mapped == set(module.platform_tables)
-        assert all(
-            model.__table__.schema == SCHEMA
-            for model in (Agreement, AgreementLine, AgreementEvent)
+        mapped_models = (
+            Agreement,
+            AgreementLine,
+            AgreementEvent,
+            AgreementApprovalWithdrawal,
         )
+        mapped = {model.__tablename__ for model in mapped_models}
+        assert mapped == set(module.platform_tables)
+        assert all(model.__table__.schema == SCHEMA for model in mapped_models)
 
     def test_no_model_carries_a_tenant_column(self) -> None:
         """A platform table with a `tenant_id` is a table that has picked the
@@ -142,11 +150,17 @@ class TestThePlaneIsDeclaredNotDiscovered:
         thing standing between two tenants."""
         from dotmac_commercial_agreements.models import (
             Agreement,
+            AgreementApprovalWithdrawal,
             AgreementEvent,
             AgreementLine,
         )
 
-        for model in (Agreement, AgreementLine, AgreementEvent):
+        for model in (
+            Agreement,
+            AgreementLine,
+            AgreementEvent,
+            AgreementApprovalWithdrawal,
+        ):
             assert "tenant_id" not in model.__table__.columns, model.__tablename__
 
 
@@ -301,13 +315,62 @@ class TestTheAuditActionIsDeclaredAndConsumed:
     def test_the_manifest_declares_exactly_the_action_the_service_writes(
         self,
     ) -> None:
-        from dotmac_commercial_agreements import AUDIT_ACTION_TRANSITIONED
+        """a4 adds a SECOND, distinct action for recording a withdrawal — it is
+        deliberately not folded into `AUDIT_ACTION_TRANSITIONED`, because a
+        withdrawal never advances `agreements.status` and an auditor searching
+        for actual transitions must never see one counted as one."""
+        from dotmac_commercial_agreements import (
+            AUDIT_ACTION_APPROVAL_WITHDRAWAL_RECORDED,
+            AUDIT_ACTION_TRANSITIONED,
+        )
 
-        assert module.audit_actions == (AUDIT_ACTION_TRANSITIONED,)
-        assert "AUDIT_ACTION_TRANSITIONED" in (SRC / "service.py").read_text()
+        assert module.audit_actions == (
+            AUDIT_ACTION_TRANSITIONED,
+            AUDIT_ACTION_APPROVAL_WITHDRAWAL_RECORDED,
+        )
+        service_source = (SRC / "service.py").read_text()
+        assert "AUDIT_ACTION_TRANSITIONED" in service_source
+        assert "AUDIT_ACTION_APPROVAL_WITHDRAWAL_RECORDED" in service_source
+
+
+class TestTheApprovalWithdrawalOutcomeVocabularyIsClosed:
+    """The five-member closed vocabulary of what recording a withdrawal did.
+
+    Only `RECORDED` and `ALREADY_RECORDED` write anything; the other three are
+    refusals. A sixth member appearing here without a corresponding branch in
+    `record_approval_withdrawal` would be a promise the service never keeps.
+    """
+
+    def test_the_outcome_is_exactly_the_five_documented_values(self) -> None:
+        from dotmac_commercial_agreements import ApprovalWithdrawalOutcome
+
+        assert {member.value for member in ApprovalWithdrawalOutcome} == {
+            "recorded",
+            "already_recorded",
+            "decision_not_carried",
+            "content_not_bound",
+            "evidence_conflict",
+        }
+
+
+class TestTheDatabaseCatalogLineageHeadIsCurrent:
+    def test_the_lineage_head_names_the_latest_migration(self) -> None:
+        """`database_catalog.lineage_head` is what the live-catalog gate uses to
+        know which revision it is comparing against — a stale head would let the
+        gate silently stop checking the newest migration's tables."""
+        assert module.database_catalog.lineage_head == "cg_0002_approval_withdrawals"
 
 
 # ── The migration ───────────────────────────────────────────────────────────
+
+
+#: The tables `cg_0001_agreements.py` itself creates. `module.platform_tables`
+#: now names FOUR tables (a4 adds `agreement_approval_withdrawals`, created by
+#: `cg_0002_approval_withdrawals.py` instead) — this class inspects one migration
+#: file's SQL text, so it is scoped to what THAT file actually creates, not to
+#: the manifest's full plane. `TestTheApprovalWithdrawalMigrationStatesItsWhole
+#: AccessSurface` below covers `cg_0002` the same way.
+_CG_0001_TABLES = ("agreements", "agreement_lines", "agreement_events")
 
 
 class TestTheMigrationStatesItsWholeAccessSurface:
@@ -321,7 +384,7 @@ class TestTheMigrationStatesItsWholeAccessSurface:
 
     def test_every_table_is_revoked_from_the_tenant_app_role(self, sql: str) -> None:
         """On the platform plane the revoke IS the isolation (hard rule 27)."""
-        for table in module.platform_tables:
+        for table in _CG_0001_TABLES:
             assert f"REVOKE ALL ON mod_agreements.{table} FROM app_user;" in sql
 
     def test_the_online_platform_role_can_actually_reach_every_table(
@@ -330,7 +393,7 @@ class TestTheMigrationStatesItsWholeAccessSurface:
         """Declared-and-unusable is a violation too. `USAGE` on the schema plus
         at least one row DML privilege per table."""
         assert "GRANT USAGE ON SCHEMA mod_agreements TO platform_api" in sql
-        for table in module.platform_tables:
+        for table in _CG_0001_TABLES:
             assert re.search(
                 rf"GRANT [A-Z, ]*SELECT[A-Z, ]* ON mod_agreements\.{table} "
                 rf"TO platform_api;",
@@ -423,6 +486,140 @@ class TestTheMigrationStatesItsWholeAccessSurface:
         assert (
             found and "UPDATE" in found[0][0]
         ), "the history-privilege sweep must match a real GRANT line"
+
+
+class TestTheApprovalWithdrawalMigrationStatesItsWholeAccessSurface:
+    """`cg_0002_approval_withdrawals.py`'s own access-surface guards — the same
+    shape `TestTheMigrationStatesItsWholeAccessSurface` proves for `cg_0001`,
+    applied to the one table that migration creates."""
+
+    _WITHDRAWALS_MIGRATION = SRC / "migrations/versions/cg_0002_approval_withdrawals.py"
+
+    @pytest.fixture
+    def sql(self) -> str:
+        return self._WITHDRAWALS_MIGRATION.read_text()
+
+    @pytest.fixture
+    def statements(self) -> str:
+        """Every string literal in the migration, each on its own line.
+
+        Read through the AST rather than as raw text: Python merges implicitly
+        concatenated literals (`"GRANT ... " "TO platform_api;"`) into ONE
+        constant, so a statement split across source lines by the formatter is
+        still matched whole. Raw-text matching silently found nothing, which
+        left the no-UPDATE/DELETE check below passing over an empty set.
+        """
+        import ast
+
+        tree = ast.parse(self._WITHDRAWALS_MIGRATION.read_text())
+        return "\n".join(
+            " ".join(node.value.split())
+            for node in ast.walk(tree)
+            if isinstance(node, ast.Constant) and isinstance(node.value, str)
+        )
+
+    def test_the_table_is_revoked_from_the_tenant_app_role(
+        self, statements: str
+    ) -> None:
+        assert (
+            "REVOKE ALL ON mod_agreements.agreement_approval_withdrawals "
+            "FROM app_user;" in statements
+        )
+
+    def test_the_online_platform_role_can_insert_and_select(
+        self, statements: str
+    ) -> None:
+        grants = re.findall(
+            r"GRANT ([A-Z, ]+) ON mod_agreements\."
+            r"agreement_approval_withdrawals TO (\w+);",
+            statements,
+        )
+        privileges_by_role = {role: privileges for privileges, role in grants}
+        assert "platform_api" in privileges_by_role
+        assert {"SELECT", "INSERT"} <= {
+            p.strip() for p in privileges_by_role["platform_api"].split(",")
+        }
+
+    def test_the_table_grants_no_update_or_delete_to_any_role(
+        self, statements: str
+    ) -> None:
+        """The property that makes a withdrawal evidence rather than a log."""
+        grants = re.findall(
+            r"GRANT ([A-Z, ]+) ON mod_agreements\.agreement_approval_withdrawals "
+            r"TO (\w+);",
+            statements,
+        )
+        # Non-vacuity: a check over an empty set passes for the wrong reason.
+        assert {role for _, role in grants} >= {"platform_api", "app_admin"}, grants
+        for grant in grants:
+            privileges, role = grant
+            assert "UPDATE" not in privileges, role
+            assert "DELETE" not in privileges, role
+
+    def test_the_append_only_trigger_covers_both_update_and_delete(
+        self, sql: str
+    ) -> None:
+        assert (
+            "BEFORE UPDATE OR DELETE ON "
+            "mod_agreements.agreement_approval_withdrawals" in sql
+        )
+
+    def test_the_trigger_message_names_this_table_not_agreement_events(
+        self, sql: str
+    ) -> None:
+        """A rewrite refusal must name the table that actually refused it — this
+        migration defines its OWN function rather than reusing
+        `refuse_history_rewrite`, whose message names `agreement_events`."""
+        assert "refuse_withdrawal_rewrite" in sql
+        assert "agreement_approval_withdrawals is append-only" in sql
+
+    def test_the_foreign_key_restricts_rather_than_cascades(self, sql: str) -> None:
+        fk = sql[sql.index("fk_agreement_approval_withdrawals_agreement_id") :][:200]
+        assert 'ondelete="RESTRICT"' in fk
+
+    def test_it_declares_both_uniqueness_constraints(self, sql: str) -> None:
+        """One withdrawal per ref, and one withdrawal per (agreement, decision) —
+        the second is defence in depth for the same conflict the service already
+        refuses rather than lets become a retried `IntegrityError`."""
+        assert "uq_agreement_approval_withdrawals_ref" in sql
+        assert '"withdrawal_ref"' in sql
+        assert "uq_agreement_approval_withdrawals_decision" in sql
+        assert '"agreement_id"' in sql
+        assert '"approval_decision_ref"' in sql
+
+    def test_it_declares_a_non_empty_reason_check(self, sql: str) -> None:
+        assert "ck_agreement_approval_withdrawals_reason" in sql
+        assert "\"reason <> ''\"" in sql
+
+    def test_the_schema_is_a_literal_and_fully_qualified_everywhere(
+        self, sql: str
+    ) -> None:
+        assert 'schema="mod_agreements"' in sql
+        assert "search_path" not in sql
+
+    def test_the_lineage_extends_cg_0001_rather_than_rooting_a_new_branch(
+        self, sql: str
+    ) -> None:
+        assert 'revision = "cg_0002_approval_withdrawals"' in sql
+        assert 'down_revision = "cg_0001_agreements"' in sql
+
+    def test_the_downgrade_refuses_evidence_before_any_drop(self, sql: str) -> None:
+        """Withdrawal rows block approve/activate/reinstate; dropping them would
+        silently re-enable every withdrawn agreement (the `ap_0003` guard)."""
+        downgrade = sql[sql.index("def downgrade") :]
+        lock = downgrade.index("IN ACCESS EXCLUSIVE MODE")
+        check = downgrade.index("SELECT EXISTS")
+        refuse = downgrade.index("contains immutable withdrawal evidence")
+        first_drop = downgrade.index("DROP ")
+        assert lock < check < refuse < first_drop
+
+    def test_the_revision_id_fits_the_alembic_column(self) -> None:
+        assert len("cg_0002_approval_withdrawals") <= 32
+
+    def test_it_verifies_prerequisites_before_any_ddl(self, sql: str) -> None:
+        verify_at = sql.index("require_prerequisites(op.get_bind(), REQUIRES)")
+        first_ddl = sql.index('op.create_table(\n        "agreement_approval')
+        assert verify_at < first_ddl
 
 
 # ── The dossier ─────────────────────────────────────────────────────────────

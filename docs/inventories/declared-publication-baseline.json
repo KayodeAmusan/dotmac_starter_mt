@@ -151,6 +151,11 @@
       "declared": "0.1.0a1",
       "reason": "SUPPLY-ONLY RELEASE AUTHORIZED BY MICHAEL ON 2026-08-25. Sub is the named first intended consumer; ERP and CRM are later consumers under the dossier. Publication makes an immutable artifact available for the separately governed backfill and shadow work; it does not compose the module, move workforce authority, or retire any Sub/ERP/CRM writer. Remove this row only in the a1 oracle-backed release record; preserve the adoption gates in EXTRACTION.toml.",
       "state": "never-published"
+    },
+    "dotmac-commercial-agreements": {
+      "declared": "0.1.0a4",
+      "reason": "ALLOCATED SUPPLY VERSION, NOT YET PUBLISHED. 0.1.0a3 is the last published and tagged version (dotmac-commercial-agreements-v0.1.0a3, peeled 5005e998, verified on the registry by the release workflow; its release record is not yet in docs/inventories/module-release-verifications.json). 0.1.0a4 was allocated to name record_approval_withdrawal, the approval-standing owner command Michael ruled on 2026-09-27 for Gate-0 C2 S4, as a version distinct from a3, since one version may not name two sets of importable bytes. It awaits the protected publication workflow and its oracle-backed release record. Remove this row only in that release-record change; never by editing the declared version merely to quiet this sweep.",
+      "state": "declared-unpublished"
     }
   }
 }

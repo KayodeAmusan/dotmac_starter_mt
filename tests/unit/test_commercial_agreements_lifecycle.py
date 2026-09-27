@@ -25,9 +25,13 @@ from datetime import UTC, date, datetime
 
 import pytest
 from dotmac_commercial_agreements import (
+    AGREEMENT_APPROVAL_WITHDRAWN_V1,
+    AUDIT_ACTION_APPROVAL_WITHDRAWAL_RECORDED,
     MAX_AGREEMENT_PAGE_SIZE,
     ActivateCommand,
     ActivationEvidence,
+    AgreementAction,
+    AgreementApprovalWithdrawal,
     AgreementBoundaryError,
     AgreementError,
     AgreementPage,
@@ -36,6 +40,7 @@ from dotmac_commercial_agreements import (
     AgreementView,
     AmendCommand,
     ApprovalEvidence,
+    ApprovalWithdrawalOutcome,
     ApproveCommand,
     CommercialTerms,
     DraftCommand,
@@ -44,6 +49,7 @@ from dotmac_commercial_agreements import (
     ExpectedStateError,
     LineInput,
     ProposeCommand,
+    RecordApprovalWithdrawalCommand,
     TerminateCommand,
     TransitionCommand,
     TransitionRefusedError,
@@ -53,6 +59,7 @@ from dotmac_commercial_agreements import (
     amend,
     approve,
     cancel,
+    detail,
     expire,
     family,
     get,
@@ -61,11 +68,13 @@ from dotmac_commercial_agreements import (
     module,
     open_draft,
     propose,
+    record_approval_withdrawal,
     reinstate,
     reject,
     suspend,
     terminate,
 )
+from dotmac_kernel.audit import PlatformAuditEvent
 from dotmac_kernel.audit_actions import AuditActionRegistry, install_audit_actions
 from dotmac_kernel.models import Base
 from sqlalchemy import create_engine, event
@@ -194,11 +203,17 @@ def _propose(db: Session, catalogue: FakeCatalogue, agreement_id: uuid.UUID):
     )
 
 
-def _evidence(digest: str, *, policy: str = "commercial.oem", version: int = 3):
+def _evidence(
+    digest: str,
+    *,
+    policy: str = "commercial.oem",
+    version: int = 3,
+    decision_ref: str | None = None,
+):
     return ApprovalEvidence(
         policy_code=policy,
         policy_version=version,
-        decision_ref=f"apr-{uuid.uuid4().hex[:10]}",
+        decision_ref=decision_ref or f"apr-{uuid.uuid4().hex[:10]}",
         content_digest=digest,
         decided_at=datetime(2026, 8, 20, 9, 0, tzinfo=UTC),
     )
@@ -221,7 +236,10 @@ def _activate(db: Session, view):
         ActivateCommand(
             command_id=f"cmd-{uuid.uuid4().hex[:12]}",
             agreement_id=view.id,
-            approval_evidence=_evidence(view.content_hash or ""),
+            # Activation must present the SAME decision that carried approval.
+            approval_evidence=_evidence(
+                view.content_hash or "", decision_ref=view.approval_decision_ref
+            ),
             activation_evidence=ActivationEvidence(
                 rule="countersignature",
                 reference="doc-4471",
@@ -236,6 +254,102 @@ def _to_active(db: Session, catalogue: FakeCatalogue):
     view = _propose(db, catalogue, view.id)
     view = _approve(db, view)
     return _activate(db, view)
+
+
+def _approved_with_decision(db: Session, catalogue: FakeCatalogue, decision_ref: str):
+    """A `proposed` agreement approved under a CALLER-CHOSEN `decision_ref`.
+
+    The generic `_approve` helper mints a random one, which is fine for the
+    lifecycle tests above but useless here: a withdrawal command has to name
+    the exact decision it is withdrawing, so the tests need to know it in
+    advance.
+    """
+    view = _propose(db, catalogue, _draft(db, catalogue).id)
+    return approve(
+        db,
+        ApproveCommand(
+            command_id=f"cmd-{uuid.uuid4().hex[:12]}",
+            agreement_id=view.id,
+            evidence=ApprovalEvidence(
+                policy_code="commercial.oem",
+                policy_version=3,
+                decision_ref=decision_ref,
+                content_digest=view.content_hash or "",
+                decided_at=datetime(2026, 8, 20, 9, 0, tzinfo=UTC),
+            ),
+        ),
+    )
+
+
+def _activate_under_decision(db: Session, view, decision_ref: str):
+    """Activate an agreement approved under `decision_ref`, re-supplying the
+    same decision — the property `activate` itself now requires."""
+    return activate(
+        db,
+        ActivateCommand(
+            command_id=f"cmd-{uuid.uuid4().hex[:12]}",
+            agreement_id=view.id,
+            approval_evidence=ApprovalEvidence(
+                policy_code="commercial.oem",
+                policy_version=3,
+                decision_ref=decision_ref,
+                content_digest=view.content_hash or "",
+                decided_at=datetime(2026, 8, 20, 9, 0, tzinfo=UTC),
+            ),
+            activation_evidence=ActivationEvidence(
+                rule="countersignature",
+                reference="doc-4471",
+                satisfied_at=datetime(2026, 8, 21, 10, 0, tzinfo=UTC),
+            ),
+        ),
+    )
+
+
+def _withdrawal_command(
+    view,
+    *,
+    decision_ref: str,
+    policy_code: str = "commercial.oem",
+    policy_version: int = 3,
+    subject_ref: str | None = None,
+    content_hash: str | None = None,
+    withdrawal_ref: str | None = None,
+) -> RecordApprovalWithdrawalCommand:
+    return RecordApprovalWithdrawalCommand(
+        command_id=f"cmd-{uuid.uuid4().hex[:12]}",
+        agreement_id=view.id,
+        approval_request_ref=f"req-{uuid.uuid4().hex[:8]}",
+        approval_decision_ref=decision_ref,
+        policy_code=policy_code,
+        policy_version=policy_version,
+        subject_ref=subject_ref if subject_ref is not None else str(view.id),
+        content_hash=(
+            content_hash if content_hash is not None else (view.content_hash or "")
+        ),
+        withdrawal_ref=withdrawal_ref or f"wd-{uuid.uuid4().hex[:10]}",
+        reason="policy compliance issue",
+        withdrawn_at=datetime(2026, 9, 5, 12, 0, tzinfo=UTC),
+    )
+
+
+def _replay(command: RecordApprovalWithdrawalCommand, **overrides: object):
+    """The same withdrawal, restated under a NEW command id — the shape a
+    genuine retry has, as opposed to a conflicting second command."""
+    fields = {
+        "command_id": f"cmd-{uuid.uuid4().hex[:12]}",
+        "agreement_id": command.agreement_id,
+        "approval_request_ref": command.approval_request_ref,
+        "approval_decision_ref": command.approval_decision_ref,
+        "policy_code": command.policy_code,
+        "policy_version": command.policy_version,
+        "subject_ref": command.subject_ref,
+        "content_hash": command.content_hash,
+        "withdrawal_ref": command.withdrawal_ref,
+        "reason": command.reason,
+        "withdrawn_at": command.withdrawn_at,
+    }
+    fields.update(overrides)
+    return RecordApprovalWithdrawalCommand(**fields)  # type: ignore[arg-type]
 
 
 # ── The forward path ────────────────────────────────────────────────────────
@@ -756,6 +870,503 @@ class TestRejectionInvalidatesApprovals:
             )
 
 
+# ── Approval withdrawal: recorded as standing, never as a transition ────────
+
+
+class TestApprovalWithdrawalOutcomes:
+    """Every outcome `record_approval_withdrawal` can report, driven from the
+    exact binding that produces it — the closed vocabulary this module commits
+    to (`ApprovalWithdrawalOutcome`)."""
+
+    def test_a_withdrawal_naming_the_approving_decision_is_recorded_as_carried(
+        self, db, catalogue
+    ) -> None:
+        view = _approved_with_decision(db, catalogue, "apr-carried")
+        result = record_approval_withdrawal(
+            db, _withdrawal_command(view, decision_ref="apr-carried")
+        )
+        assert result.outcome == ApprovalWithdrawalOutcome.RECORDED
+        assert result.approval_carried is True
+        assert result.status == "approved"
+        assert result.withdrawal_id is not None
+
+    def test_a_withdrawal_against_a_still_proposed_agreement_is_recorded_uncarried(
+        self, db, catalogue
+    ) -> None:
+        """No decision is bound yet — this is what blocks the FIRST approval
+        from ever landing on this row."""
+        view = _propose(db, catalogue, _draft(db, catalogue).id)
+        result = record_approval_withdrawal(
+            db,
+            _withdrawal_command(
+                view, decision_ref="apr-never-approved", content_hash=view.content_hash
+            ),
+        )
+        assert result.outcome == ApprovalWithdrawalOutcome.RECORDED
+        assert result.approval_carried is False
+        assert result.status == "proposed"
+
+    def test_an_identical_replay_of_the_same_withdrawal_ref_is_already_recorded(
+        self, db, catalogue
+    ) -> None:
+        view = _approved_with_decision(db, catalogue, "apr-replay")
+        command = _withdrawal_command(view, decision_ref="apr-replay")
+        first = record_approval_withdrawal(db, command)
+        # Identical payload under a new command id. (A different reason under the
+        # same reference is a conflict — see the replay-identity tests below.)
+        second = record_approval_withdrawal(db, _replay(command))
+        assert second.outcome == ApprovalWithdrawalOutcome.ALREADY_RECORDED
+        assert second.withdrawal_id == first.withdrawal_id
+        assert second.approval_carried == first.approval_carried
+
+    def test_the_same_withdrawal_ref_with_a_different_binding_is_an_evidence_conflict(
+        self, db, catalogue
+    ) -> None:
+        view = _approved_with_decision(db, catalogue, "apr-conflict")
+        command = _withdrawal_command(view, decision_ref="apr-conflict")
+        record_approval_withdrawal(db, command)
+        result = record_approval_withdrawal(
+            db, _replay(command, approval_request_ref="a-different-request-ref")
+        )
+        assert result.outcome == ApprovalWithdrawalOutcome.EVIDENCE_CONFLICT
+        assert result.withdrawal_id is None
+
+    def test_a_second_withdrawal_ref_for_an_already_withdrawn_decision_is_a_conflict(
+        self, db, catalogue
+    ) -> None:
+        """The a4 deviation: a second DISTINCT `withdrawal_ref` naming the same
+        (agreement, decision) is refused as `evidence_conflict` rather than left
+        to the unique constraint as an `IntegrityError` a caller would retry
+        forever."""
+        view = _approved_with_decision(db, catalogue, "apr-twice")
+        record_approval_withdrawal(
+            db, _withdrawal_command(view, decision_ref="apr-twice")
+        )
+        result = record_approval_withdrawal(
+            db, _withdrawal_command(view, decision_ref="apr-twice")
+        )
+        assert result.outcome == ApprovalWithdrawalOutcome.EVIDENCE_CONFLICT
+        assert result.withdrawal_id is None
+
+    def test_a_withdrawal_naming_the_wrong_subject_is_an_evidence_conflict(
+        self, db, catalogue
+    ) -> None:
+        view = _approved_with_decision(db, catalogue, "apr-subject")
+        result = record_approval_withdrawal(
+            db,
+            _withdrawal_command(
+                view, decision_ref="apr-subject", subject_ref=str(uuid.uuid4())
+            ),
+        )
+        assert result.outcome == ApprovalWithdrawalOutcome.EVIDENCE_CONFLICT
+        assert result.withdrawal_id is None
+
+    def test_a_withdrawal_naming_a_different_frozen_policy_is_an_evidence_conflict(
+        self, db, catalogue
+    ) -> None:
+        view = _approved_with_decision(db, catalogue, "apr-policy")
+        result = record_approval_withdrawal(
+            db,
+            _withdrawal_command(
+                view, decision_ref="apr-policy", policy_code="commercial.direct"
+            ),
+        )
+        assert result.outcome == ApprovalWithdrawalOutcome.EVIDENCE_CONFLICT
+        assert result.withdrawal_id is None
+
+    def test_a_mismatched_content_hash_on_an_unapproved_row_is_content_not_bound(
+        self, db, catalogue
+    ) -> None:
+        view = _propose(db, catalogue, _draft(db, catalogue).id)
+        result = record_approval_withdrawal(
+            db,
+            _withdrawal_command(
+                view, decision_ref="apr-never-approved", content_hash="0" * 64
+            ),
+        )
+        assert result.outcome == ApprovalWithdrawalOutcome.CONTENT_NOT_BOUND
+        assert result.withdrawal_id is None
+
+    def test_a_decision_ref_that_is_neither_bound_nor_unset_is_decision_not_carried(
+        self, db, catalogue
+    ) -> None:
+        view = _approved_with_decision(db, catalogue, "apr-actual")
+        result = record_approval_withdrawal(
+            db,
+            _withdrawal_command(view, decision_ref="apr-someone-elses-decision"),
+        )
+        assert result.outcome == ApprovalWithdrawalOutcome.DECISION_NOT_CARRIED
+        assert result.withdrawal_id is None
+
+
+class TestApprovalWithdrawalIsRecordedAsStandingNotAsATransition:
+    def test_recording_never_changes_status_and_bumps_the_version_exactly_once(
+        self, db, catalogue
+    ) -> None:
+        view = _approved_with_decision(db, catalogue, "apr-version")
+        before_version = view.record_version
+        record_approval_withdrawal(
+            db, _withdrawal_command(view, decision_ref="apr-version")
+        )
+        after = get(db, view.id)
+        assert after is not None
+        assert after.status == "approved"
+        assert after.record_version == before_version + 1
+
+    def test_a_replay_of_an_already_recorded_withdrawal_does_not_bump_it_again(
+        self, db, catalogue
+    ) -> None:
+        view = _approved_with_decision(db, catalogue, "apr-replay-version")
+        command = _withdrawal_command(view, decision_ref="apr-replay-version")
+        record_approval_withdrawal(db, command)
+        after_first = get(db, view.id)
+        assert after_first is not None
+        record_approval_withdrawal(db, _replay(command))
+        after_second = get(db, view.id)
+        assert after_second is not None
+        assert after_second.record_version == after_first.record_version
+
+    def test_recording_writes_exactly_one_history_row_with_equal_from_and_to_status(
+        self, db, catalogue
+    ) -> None:
+        view = _approved_with_decision(db, catalogue, "apr-hist")
+        before = len(history(db, view.id))
+        record_approval_withdrawal(
+            db, _withdrawal_command(view, decision_ref="apr-hist")
+        )
+        rows = history(db, view.id)
+        assert len(rows) == before + 1
+        new_row = rows[-1]
+        assert new_row.from_status == new_row.to_status == "approved"
+        assert new_row.event_type == AGREEMENT_APPROVAL_WITHDRAWN_V1
+
+    def test_recording_writes_the_withdrawal_audit_action_not_the_transition_one(
+        self, db, catalogue
+    ) -> None:
+        view = _approved_with_decision(db, catalogue, "apr-audit")
+        record_approval_withdrawal(
+            db, _withdrawal_command(view, decision_ref="apr-audit")
+        )
+        rows = (
+            db.query(PlatformAuditEvent)
+            .filter(PlatformAuditEvent.entity_id == str(view.id))
+            .all()
+        )
+        # Not ordered by `created_at`: SQLite's `CURRENT_TIMESTAMP` has
+        # second-level resolution, and propose/approve/withdrawal can land in
+        # the same second — an ordering assumption would be flaky for a reason
+        # that has nothing to do with the property under test. Exactly one row
+        # carries the withdrawal action; the rest (propose, approve) carry the
+        # transition action, never this one.
+        withdrawal_rows = [
+            row
+            for row in rows
+            if row.action == AUDIT_ACTION_APPROVAL_WITHDRAWAL_RECORDED
+        ]
+        assert len(withdrawal_rows) == 1
+
+    def test_non_record_outcomes_write_no_withdrawal_row_and_no_history_row(
+        self, db, catalogue
+    ) -> None:
+        view = _approved_with_decision(db, catalogue, "apr-clean")
+        before_history = len(history(db, view.id))
+        before_version = view.record_version
+        result = record_approval_withdrawal(
+            db,
+            _withdrawal_command(
+                view, decision_ref="apr-clean", subject_ref=str(uuid.uuid4())
+            ),
+        )
+        assert result.outcome == ApprovalWithdrawalOutcome.EVIDENCE_CONFLICT
+        after = get(db, view.id)
+        assert after is not None
+        assert after.record_version == before_version
+        assert len(history(db, view.id)) == before_history
+        rows = (
+            db.query(AgreementApprovalWithdrawal)
+            .filter(AgreementApprovalWithdrawal.agreement_id == view.id)
+            .all()
+        )
+        assert rows == []
+
+
+class TestWithdrawalRefusalsAreDecidedFreshUnderTheLock:
+    """Review of #759: a refusal is decided under the row lock, on every
+    delivery — it writes nothing, so it cannot be memoized under the command
+    id the way a `RECORDED` outcome is. These pin the decisions the fix in
+    HEAD makes, each one a case the pre-fix code got wrong."""
+
+    def test_a_refusal_is_not_memoized_and_the_same_command_id_later_records(
+        self, db, catalogue
+    ) -> None:
+        """The exact bug in review #759: `content_not_bound` while the row was
+        a draft, replayed forever by the ledger once the row was proposed with
+        a matching digest. If the refusal were still memoized under
+        `process_once_platform`, this second call would report
+        `content_not_bound` again instead of `recorded`."""
+        view = _draft(db, catalogue)
+        first_command = _withdrawal_command(
+            view, decision_ref="apr-never-approved", content_hash="0" * 64
+        )
+        first = record_approval_withdrawal(db, first_command)
+        assert first.outcome == ApprovalWithdrawalOutcome.CONTENT_NOT_BOUND
+
+        proposed = _propose(db, catalogue, view.id)
+        second_command = _replay(
+            first_command,
+            command_id=first_command.command_id,
+            content_hash=proposed.content_hash,
+        )
+        second = record_approval_withdrawal(db, second_command)
+        assert second.outcome == ApprovalWithdrawalOutcome.RECORDED
+        assert second.approval_carried is False
+
+    def test_a_carried_withdrawal_with_a_contradicting_digest_is_an_evidence_conflict(
+        self, db, catalogue
+    ) -> None:
+        """Check 3's digest guard: the decision matches the row's own, but the
+        command's digest contradicts the one this module froze — refused
+        rather than written into append-only evidence."""
+        view = _approved_with_decision(db, catalogue, "apr-digest-conflict")
+        result = record_approval_withdrawal(
+            db,
+            _withdrawal_command(
+                view, decision_ref="apr-digest-conflict", content_hash="f" * 64
+            ),
+        )
+        assert result.outcome == ApprovalWithdrawalOutcome.EVIDENCE_CONFLICT
+        assert result.withdrawal_id is None
+        rows = (
+            db.query(AgreementApprovalWithdrawal)
+            .filter(AgreementApprovalWithdrawal.agreement_id == view.id)
+            .all()
+        )
+        assert rows == []
+
+    def test_a_withdrawal_recorded_on_a_terminated_agreement_is_carried(
+        self, db, catalogue
+    ) -> None:
+        """Never a transition: a terminal agreement is recorded historically,
+        never refused, and its status does not move."""
+        view = _approved_with_decision(db, catalogue, "apr-terminal")
+        activated = _activate_under_decision(db, view, "apr-terminal")
+        terminated = terminate(
+            db,
+            TerminateCommand(
+                command_id="cmd-t",
+                agreement_id=activated.id,
+                effective_date=date(2026, 12, 31),
+                impact_acknowledged=True,
+                reason="counterparty exit",
+            ),
+        )
+        result = record_approval_withdrawal(
+            db, _withdrawal_command(terminated, decision_ref="apr-terminal")
+        )
+        assert result.outcome == ApprovalWithdrawalOutcome.RECORDED
+        assert result.approval_carried is True
+        assert result.status == AgreementStatus.TERMINATED.value
+
+    def test_a_suspended_agreement_with_a_withdrawal_excludes_reinstate(
+        self, db, catalogue
+    ) -> None:
+        view = _approved_with_decision(db, catalogue, "apr-suspended-reinstate")
+        activated = _activate_under_decision(db, view, "apr-suspended-reinstate")
+        suspended = suspend(
+            db, TransitionCommand("cmd-s", activated.id, reason="billing hold")
+        )
+        record_approval_withdrawal(
+            db,
+            _withdrawal_command(suspended, decision_ref="apr-suspended-reinstate"),
+        )
+        agreement_detail = detail(db, suspended.id)
+        assert agreement_detail is not None
+        assert AgreementAction.REINSTATE not in agreement_detail.permitted_actions
+        with pytest.raises(TransitionRefusedError):
+            reinstate(db, TransitionCommand("cmd-r", suspended.id))
+
+    def test_a_command_id_reused_from_another_command_is_refused(
+        self, db, catalogue
+    ) -> None:
+        """The kernel's platform ledger keys on `command_id` alone, across
+        every command type — a `suspend` and a `record_approval_withdrawal`
+        sharing one id collide in the SAME ledger row. A replay is trusted
+        only when it is THIS command's own record; the `suspend` record
+        `process_once_platform` finds instead names neither an `outcome` nor a
+        `withdrawal_ref`, so this raises rather than reporting `recorded`."""
+        view = _approved_with_decision(db, catalogue, "apr-shared-command")
+        activated = _activate_under_decision(db, view, "apr-shared-command")
+        suspend(
+            db, TransitionCommand("cmd-shared", activated.id, reason="billing hold")
+        )
+
+        withdrawal_command = _replay(
+            _withdrawal_command(activated, decision_ref="apr-shared-command"),
+            command_id="cmd-shared",
+        )
+        with pytest.raises(TransitionRefusedError, match="already used"):
+            record_approval_withdrawal(db, withdrawal_command)
+
+        rows = (
+            db.query(AgreementApprovalWithdrawal)
+            .filter(AgreementApprovalWithdrawal.agreement_id == activated.id)
+            .all()
+        )
+        assert rows == [], "the collision must not be reported as a record"
+
+
+class TestAWithdrawalBlocksReapprovalNeverOtherTransitions:
+    def test_approve_is_refused_once_a_withdrawal_is_recorded(
+        self, db, catalogue
+    ) -> None:
+        view = _propose(db, catalogue, _draft(db, catalogue).id)
+        record_approval_withdrawal(
+            db,
+            _withdrawal_command(
+                view, decision_ref="apr-blocks-approval", content_hash=view.content_hash
+            ),
+        )
+        with pytest.raises(TransitionRefusedError):
+            approve(
+                db,
+                ApproveCommand(
+                    command_id="cmd-x",
+                    agreement_id=view.id,
+                    evidence=_evidence(view.content_hash or ""),
+                ),
+            )
+
+    def test_activate_is_refused_once_a_withdrawal_is_recorded_on_the_approved_row(
+        self, db, catalogue
+    ) -> None:
+        view = _approved_with_decision(db, catalogue, "apr-blocks-activation")
+        record_approval_withdrawal(
+            db, _withdrawal_command(view, decision_ref="apr-blocks-activation")
+        )
+        with pytest.raises(TransitionRefusedError):
+            _activate_under_decision(db, view, "apr-blocks-activation")
+
+    def test_reinstate_is_refused_once_a_withdrawal_is_recorded_on_a_suspended_row(
+        self, db, catalogue
+    ) -> None:
+        view = _approved_with_decision(db, catalogue, "apr-blocks-reinstate")
+        activated = _activate_under_decision(db, view, "apr-blocks-reinstate")
+        suspended = suspend(
+            db, TransitionCommand("cmd-s", activated.id, reason="billing hold")
+        )
+        record_approval_withdrawal(
+            db,
+            _withdrawal_command(suspended, decision_ref="apr-blocks-reinstate"),
+        )
+        with pytest.raises(TransitionRefusedError):
+            reinstate(db, TransitionCommand("cmd-r", suspended.id))
+
+    def test_permitted_actions_excludes_approve_activate_and_reinstate(
+        self, db, catalogue
+    ) -> None:
+        view = _propose(db, catalogue, _draft(db, catalogue).id)
+        record_approval_withdrawal(
+            db,
+            _withdrawal_command(
+                view, decision_ref="apr-permitted", content_hash=view.content_hash
+            ),
+        )
+        agreement_detail = detail(db, view.id)
+        assert agreement_detail is not None
+        assert AgreementAction.APPROVE not in agreement_detail.permitted_actions
+        assert AgreementAction.ACTIVATE not in agreement_detail.permitted_actions
+        assert AgreementAction.REINSTATE not in agreement_detail.permitted_actions
+
+    def test_the_view_and_detail_report_approval_withdrawn(self, db, catalogue) -> None:
+        view = _approved_with_decision(db, catalogue, "apr-view-flag")
+        before = get(db, view.id)
+        assert before is not None
+        assert before.approval_withdrawn is False
+        record_approval_withdrawal(
+            db, _withdrawal_command(view, decision_ref="apr-view-flag")
+        )
+        after = get(db, view.id)
+        assert after is not None
+        assert after.approval_withdrawn is True
+        agreement_detail = detail(db, view.id)
+        assert agreement_detail is not None
+        assert agreement_detail.agreement.approval_withdrawn is True
+        assert agreement_detail.approval_withdrawn is True
+
+    def test_suspend_still_works_after_a_withdrawal_is_recorded(
+        self, db, catalogue
+    ) -> None:
+        view = _approved_with_decision(db, catalogue, "apr-suspend-ok")
+        activated = _activate_under_decision(db, view, "apr-suspend-ok")
+        record_approval_withdrawal(
+            db, _withdrawal_command(activated, decision_ref="apr-suspend-ok")
+        )
+        suspended = suspend(
+            db, TransitionCommand("cmd-s", activated.id, reason="billing hold")
+        )
+        assert suspended.status == AgreementStatus.SUSPENDED.value
+
+    def test_cancel_still_works_after_a_withdrawal_is_recorded(
+        self, db, catalogue
+    ) -> None:
+        view = _propose(db, catalogue, _draft(db, catalogue).id)
+        record_approval_withdrawal(
+            db,
+            _withdrawal_command(
+                view, decision_ref="apr-cancel-ok", content_hash=view.content_hash
+            ),
+        )
+        cancelled = cancel(db, TransitionCommand("cmd-c", view.id))
+        assert cancelled.status == AgreementStatus.CANCELLED.value
+
+    def test_terminate_still_works_after_a_withdrawal_is_recorded(
+        self, db, catalogue
+    ) -> None:
+        view = _approved_with_decision(db, catalogue, "apr-terminate-ok")
+        activated = _activate_under_decision(db, view, "apr-terminate-ok")
+        record_approval_withdrawal(
+            db, _withdrawal_command(activated, decision_ref="apr-terminate-ok")
+        )
+        terminated = terminate(
+            db,
+            TerminateCommand(
+                command_id="cmd-t",
+                agreement_id=activated.id,
+                effective_date=date(2026, 12, 31),
+                impact_acknowledged=True,
+                reason="counterparty exit",
+            ),
+        )
+        assert terminated.status == AgreementStatus.TERMINATED.value
+
+
+class TestActivationRequiresTheSameDecisionThatCarriedApproval:
+    def test_activation_naming_a_different_decision_than_the_approval_is_refused(
+        self, db, catalogue
+    ) -> None:
+        view = _approved_with_decision(db, catalogue, "apr-original-decision")
+        with pytest.raises(EvidenceRefusedError, match="SAME decision"):
+            activate(
+                db,
+                ActivateCommand(
+                    command_id="cmd-act",
+                    agreement_id=view.id,
+                    approval_evidence=ApprovalEvidence(
+                        policy_code="commercial.oem",
+                        policy_version=3,
+                        decision_ref="apr-a-different-decision",
+                        content_digest=view.content_hash or "",
+                        decided_at=datetime(2026, 8, 20, 9, 0, tzinfo=UTC),
+                    ),
+                    activation_evidence=ActivationEvidence(
+                        rule="countersignature",
+                        reference="doc-1",
+                        satisfied_at=datetime(2026, 8, 21, 10, 0, tzinfo=UTC),
+                    ),
+                ),
+            )
+
+
 # ── Transaction authority ───────────────────────────────────────────────────
 
 
@@ -771,3 +1382,60 @@ class TestTheModuleOwnsNoTransaction:
         view = _draft(db, catalogue)
         db.rollback()
         assert get(db, view.id) is None
+
+
+class TestWithdrawalReplayNeverDependsOnMutableRowState:
+    """Opus acceptance of #759: the replay lookup runs FIRST, against the stored
+    withdrawal only, so an identical redelivery replays even after the row's
+    frozen policy has changed; reason and time are part of the identity."""
+
+    def test_replay_after_reject_and_repropose_under_a_new_policy(
+        self, db: Session, catalogue: FakeCatalogue
+    ) -> None:
+        view = _propose(db, catalogue, _draft(db, catalogue).id)
+        command = _withdrawal_command(view, decision_ref="apr-before-reject")
+        first = record_approval_withdrawal(db, command)
+        assert first.outcome is ApprovalWithdrawalOutcome.RECORDED
+
+        drafted = reject(db, TransitionCommand("cmd-r1", view.id, reason="terms"))
+        propose(
+            db,
+            ProposeCommand(
+                command_id="cmd-p2",
+                agreement_id=drafted.id,
+                approval_policy_code="commercial.direct",
+                approval_policy_version=9,
+            ),
+            catalogue=catalogue,
+        )
+
+        again = record_approval_withdrawal(db, _replay(command))
+        assert again.outcome is ApprovalWithdrawalOutcome.ALREADY_RECORDED
+        assert again.withdrawal_id == first.withdrawal_id
+
+    def test_the_same_reference_with_a_different_reason_is_a_conflict(
+        self, db: Session, catalogue: FakeCatalogue
+    ) -> None:
+        view = _propose(db, catalogue, _draft(db, catalogue).id)
+        command = _withdrawal_command(view, decision_ref="apr-reason")
+        record_approval_withdrawal(db, command)
+        changed = record_approval_withdrawal(
+            db, _replay(command, reason="a different reason")
+        )
+        assert changed.outcome is ApprovalWithdrawalOutcome.EVIDENCE_CONFLICT
+
+    def test_an_over_long_reference_is_refused_at_construction(self) -> None:
+        with pytest.raises(AgreementError, match="withdrawal_ref exceeds 200"):
+            RecordApprovalWithdrawalCommand(
+                command_id="cmd-long",
+                agreement_id=uuid.uuid4(),
+                approval_request_ref="req",
+                approval_decision_ref="apr",
+                policy_code="commercial.oem",
+                policy_version=3,
+                subject_ref="subject",
+                content_hash="a" * 64,
+                withdrawal_ref="w" * 201,
+                reason="reason",
+                withdrawn_at=datetime(2026, 9, 5, 12, 0, tzinfo=UTC),
+            )
