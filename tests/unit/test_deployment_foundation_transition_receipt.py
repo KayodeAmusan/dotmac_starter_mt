@@ -20,6 +20,7 @@ from unittest.mock import patch
 import pytest
 from dotmac_deployment_foundation.backup import ArtefactClass, Assurance, BackupRecord
 from dotmac_deployment_foundation.errors import SecretValueError, SpecError
+from dotmac_deployment_foundation.external_recovery import EXTERNAL_BACKUP_PATH_PREFIX
 from dotmac_deployment_foundation.spec import ProductDeploymentSpec
 from dotmac_deployment_foundation.transition_receipt import (
     TRANSITION_RECEIPT_SCHEMA,
@@ -123,7 +124,7 @@ def _verify(
     spec: Any,
     receipt: TransitionReceiptV1,
     *,
-    observed_target_heads: Any = None,
+    observed_target_heads: Any = _UNSET,
     previous_receipt: Any = _UNSET,
     genesis_source: Any = _UNSET,
     backup_record: BackupRecord | None = None,
@@ -139,14 +140,15 @@ def _verify(
         resolved_genesis = receipt.source if resolved_previous is None else None
     else:
         resolved_genesis = genesis_source
+    resolved_heads: Any = (
+        spec.migration.expected_heads
+        if observed_target_heads is _UNSET
+        else observed_target_heads
+    )
     return verify_transition_receipt(
         receipt,
         spec=spec,
-        observed_target_heads=(
-            observed_target_heads
-            if observed_target_heads is not None
-            else spec.migration.expected_heads
-        ),
+        observed_target_heads=resolved_heads,
         previous_receipt=resolved_previous,
         genesis_source=resolved_genesis,
         backup_record=backup_record if backup_record is not None else _backup_record(),
@@ -301,6 +303,53 @@ def test_a_chain_hop_to_a_different_host_is_refused() -> None:
     verdict = _verify(
         spec, cross_host, previous_receipt=first, expected_target="host-b"
     )
+    assert TransitionFinding.CHAIN_SCOPE_MISMATCH in verdict.findings
+
+    verdict_ok = _verify(spec, second, previous_receipt=first)
+    assert TransitionFinding.CHAIN_SCOPE_MISMATCH not in verdict_ok.findings
+
+
+def test_a_chain_hop_with_a_different_product_is_refused() -> None:
+    """Chain scope is product AND environment AND target -- not just target."""
+    spec = _spec()
+    first, second = _chained_second_receipt(spec)
+    wrong_product = TransitionReceiptV1(
+        product="a-different-product",
+        environment=first.environment,
+        target=first.target,
+        run_id="run-2",
+        source=TransitionSide(
+            descriptor_sha256=first.target_side.descriptor_sha256,
+            migration_heads=first.target_side.migration_heads,
+        ),
+        target_side=_target_side(spec),
+        backup=_backup(),
+        previous_receipt_digest=str(first.digest()),
+    )
+    verdict = _verify(spec, wrong_product, previous_receipt=first)
+    assert TransitionFinding.CHAIN_SCOPE_MISMATCH in verdict.findings
+
+    verdict_ok = _verify(spec, second, previous_receipt=first)
+    assert TransitionFinding.CHAIN_SCOPE_MISMATCH not in verdict_ok.findings
+
+
+def test_a_chain_hop_with_a_different_environment_is_refused() -> None:
+    spec = _spec()
+    first, second = _chained_second_receipt(spec)
+    wrong_environment = TransitionReceiptV1(
+        product=first.product,
+        environment="a-different-environment",
+        target=first.target,
+        run_id="run-2",
+        source=TransitionSide(
+            descriptor_sha256=first.target_side.descriptor_sha256,
+            migration_heads=first.target_side.migration_heads,
+        ),
+        target_side=_target_side(spec),
+        backup=_backup(),
+        previous_receipt_digest=str(first.digest()),
+    )
+    verdict = _verify(spec, wrong_environment, previous_receipt=first)
     assert TransitionFinding.CHAIN_SCOPE_MISMATCH in verdict.findings
 
     verdict_ok = _verify(spec, second, previous_receipt=first)
@@ -536,6 +585,42 @@ def test_a_heads_only_chain_source_mismatch_is_refused() -> None:
     assert TransitionFinding.CHAIN_SOURCE_MISMATCH in verdict.findings
 
 
+def test_none_observed_heads_is_a_finding_not_a_coercion() -> None:
+    """The 'never coerces' claim: `None` is not silently `str()`-ed."""
+    spec = _spec()
+    receipt = _receipt(spec)
+    bad_heads: Any = None
+    verdict = _verify(spec, receipt, observed_target_heads=bad_heads)
+    assert TransitionFinding.INPUT_NOT_CANONICALIZABLE in verdict.findings
+
+    verdict_ok = _verify(spec, receipt)
+    assert TransitionFinding.INPUT_NOT_CANONICALIZABLE not in verdict_ok.findings
+
+
+def test_a_bare_string_of_observed_heads_is_a_finding_not_a_coercion() -> None:
+    """A bare string is iterable character-by-character -- exactly the gotcha
+    this must refuse rather than silently walk."""
+    spec = _spec()
+    receipt = _receipt(spec)
+    bad_heads: Any = "a003"
+    verdict = _verify(spec, receipt, observed_target_heads=bad_heads)
+    assert TransitionFinding.INPUT_NOT_CANONICALIZABLE in verdict.findings
+
+    verdict_ok = _verify(spec, receipt)
+    assert TransitionFinding.INPUT_NOT_CANONICALIZABLE not in verdict_ok.findings
+
+
+def test_a_non_string_observed_head_element_is_a_finding_not_a_coercion() -> None:
+    spec = _spec()
+    receipt = _receipt(spec)
+    bad_heads: Any = [123]
+    verdict = _verify(spec, receipt, observed_target_heads=bad_heads)
+    assert TransitionFinding.INPUT_NOT_CANONICALIZABLE in verdict.findings
+
+    verdict_ok = _verify(spec, receipt)
+    assert TransitionFinding.INPUT_NOT_CANONICALIZABLE not in verdict_ok.findings
+
+
 # ── descriptor / image / product findings ───────────────────────────────────
 
 
@@ -760,6 +845,125 @@ def test_a_size_mismatch_is_refused() -> None:
     assert TransitionFinding.BACKUP_SIZE_MISMATCH not in verdict_ok.findings
 
 
+def test_a_non_int_backup_record_size_is_a_finding_not_a_coercion() -> None:
+    """The 'never raises'/'never coerces' claim: a float `size_bytes` is a
+    finding, not silently truncated by `int()`."""
+    spec = _spec()
+    receipt = _receipt(spec)
+    bad_size: Any = 1_000_000.5
+    record = BackupRecord(
+        dataset="starter-db",
+        path=_BACKUP_PATH,
+        size_bytes=bad_size,
+        checksum="deadbeef" * 8,
+        checksum_algorithm="sha256",
+        completed_at_epoch=1_700_000_000,
+        assurance=Assurance.PROVED,
+        artefact_class=ArtefactClass.RECOVERY_BUNDLE,
+    )
+    verdict = _verify(spec, receipt, backup_record=record)
+    assert TransitionFinding.INPUT_NOT_CANONICALIZABLE in verdict.findings
+    assert TransitionFinding.BACKUP_SIZE_MISMATCH not in verdict.findings
+
+    verdict_ok = _verify(spec, receipt)
+    assert TransitionFinding.INPUT_NOT_CANONICALIZABLE not in verdict_ok.findings
+
+
+def test_a_bool_backup_record_size_is_a_finding_not_a_coercion() -> None:
+    spec = _spec()
+    receipt = _receipt(spec)
+    bad_size: Any = True
+    record = BackupRecord(
+        dataset="starter-db",
+        path=_BACKUP_PATH,
+        size_bytes=bad_size,
+        checksum="deadbeef" * 8,
+        checksum_algorithm="sha256",
+        completed_at_epoch=1_700_000_000,
+        assurance=Assurance.PROVED,
+        artefact_class=ArtefactClass.RECOVERY_BUNDLE,
+    )
+    verdict = _verify(spec, receipt, backup_record=record)
+    assert TransitionFinding.INPUT_NOT_CANONICALIZABLE in verdict.findings
+
+    verdict_ok = _verify(spec, receipt)
+    assert TransitionFinding.INPUT_NOT_CANONICALIZABLE not in verdict_ok.findings
+
+
+def test_an_unsupported_checksum_algorithm_is_refused() -> None:
+    spec = _spec()
+    receipt = _receipt(
+        spec,
+        backup=TransitionBackup(
+            bundle_digest="deadbeef" * 8,
+            checksum_algorithm="md5",
+            size_bytes=1_000_000,
+            bundle_id=_BACKUP_PATH,
+        ),
+    )
+    record = BackupRecord(
+        dataset="starter-db",
+        path=_BACKUP_PATH,
+        size_bytes=1_000_000,
+        checksum="deadbeef" * 8,
+        checksum_algorithm="md5",
+        completed_at_epoch=1_700_000_000,
+        assurance=Assurance.PROVED,
+        artefact_class=ArtefactClass.RECOVERY_BUNDLE,
+    )
+    verdict = _verify(spec, receipt, backup_record=record)
+    assert TransitionFinding.BACKUP_ALGORITHM_UNSUPPORTED in verdict.findings
+
+    # near miss: sha512 is allowed (mirrors spec.BackupDataset.CHECKSUMS)
+    sha512_receipt = _receipt(
+        spec,
+        backup=TransitionBackup(
+            bundle_digest="c" * 128,
+            checksum_algorithm="sha512",
+            size_bytes=1_000_000,
+            bundle_id=_BACKUP_PATH,
+        ),
+    )
+    sha512_record = BackupRecord(
+        dataset="starter-db",
+        path=_BACKUP_PATH,
+        size_bytes=1_000_000,
+        checksum="c" * 128,
+        checksum_algorithm="sha512",
+        completed_at_epoch=1_700_000_000,
+        assurance=Assurance.PROVED,
+        artefact_class=ArtefactClass.RECOVERY_BUNDLE,
+    )
+    verdict_ok = _verify(spec, sha512_receipt, backup_record=sha512_record)
+    assert TransitionFinding.BACKUP_ALGORITHM_UNSUPPORTED not in verdict_ok.findings
+
+
+def test_a_backup_record_shaped_like_an_external_receipt_is_refused() -> None:
+    """A record built (or shaped identically to one built) by
+    `external_recovery.backup_record_from_receipt` names an executor and a
+    restore duration, not a real artefact id and byte count -- refused rather
+    than treated as a bound backup."""
+    spec = _spec()
+    external_path = f"{EXTERNAL_BACKUP_PATH_PREFIX}some-executor"
+    receipt = _receipt(spec, backup=_backup(bundle_id=external_path))
+    record = BackupRecord(
+        dataset="starter-db",
+        path=external_path,
+        size_bytes=receipt.backup.size_bytes,
+        checksum=receipt.backup.bundle_digest,
+        checksum_algorithm=receipt.backup.checksum_algorithm,
+        completed_at_epoch=1_700_000_000,
+        assurance=Assurance.PROVED,
+        artefact_class=ArtefactClass.RECOVERY_BUNDLE,
+    )
+    verdict = _verify(spec, receipt, backup_record=record)
+    assert TransitionFinding.BACKUP_RECORD_NOT_ARTEFACT_BOUND in verdict.findings
+
+    # near miss: a real, locally written artefact path
+    verdict_ok = _verify(spec, _receipt(spec))
+    assert TransitionFinding.BACKUP_RECORD_NOT_ARTEFACT_BOUND not in verdict_ok.findings
+
+
 # ── constructor guards ───────────────────────────────────────────────────────
 
 
@@ -921,6 +1125,22 @@ def test_parse_refuses_a_non_string_head() -> None:
         TransitionReceiptV1.parse(document)
 
 
+def test_parse_refuses_a_padded_head() -> None:
+    spec = _spec()
+    document = _valid_document(spec)
+    document["source"]["migration_heads"] = ["a000 "]
+    with pytest.raises(SpecError, match="whitespace"):
+        TransitionReceiptV1.parse(document)
+
+
+def test_parse_refuses_an_empty_head() -> None:
+    spec = _spec()
+    document = _valid_document(spec)
+    document["source"]["migration_heads"] = [""]
+    with pytest.raises(SpecError, match="empty"):
+        TransitionReceiptV1.parse(document)
+
+
 def test_parse_refuses_a_bool_size_bytes() -> None:
     spec = _spec()
     document = _valid_document(spec)
@@ -1053,6 +1273,80 @@ def test_the_canonical_form_matches_a_pinned_golden_vector() -> None:
     )
     expected_digest = (
         "sha256:e82d1d23035992a1541c863724b5f45e8b45e6fc32c037101337fa54580fe11a"
+    )
+
+    assert receipt.canonical_bytes() == expected_canonical_bytes
+    assert str(receipt.digest()) == expected_digest
+    assert receipt.as_mapping() == document
+
+
+def test_a_second_golden_vector_pins_non_ascii_and_a_chained_digest() -> None:
+    """The first golden vector's `target`/`run_id`/`previous_receipt_digest`
+    are all plain ASCII and null, so it cannot tell an `ensure_ascii=True`
+    canonicalization apart from this module's actual `ensure_ascii=False`
+    (both would produce identical bytes for pure-ASCII, null-digest input).
+    This vector adds a non-ASCII character in a free-form field (``target``)
+    and a non-null ``previous_receipt_digest``, so a future accidental flip
+    of ``ensure_ascii`` (`\\u00f4` instead of the raw UTF-8 bytes) or a
+    dropped/renamed ``previous_receipt_digest`` key would change the digest
+    and be caught here.
+
+    ``expected_canonical_bytes``/``expected_digest`` were derived OUTSIDE
+    this test and outside `transition_receipt.py`: the canonical JSON string
+    below was typed by hand (not produced by `canonical_bytes()`), written to
+    a file, and hashed with both ``shasum -a 256`` and, independently,
+    ``openssl dgst -sha256`` on the command line -- not with this module's
+    own `hashlib`-based `Digest.of`. Both external tools agreed on
+    ``83f2c0790494b1f90978c19dcf537c102d1b5a42d7ac632487d184b6274d04e5``.
+    """
+    document = {
+        "schema": TRANSITION_RECEIPT_SCHEMA,
+        "product": "golden-product-2",
+        "environment": "golden-env-2",
+        "target": "golden-hôte",
+        "run_id": "golden-run-2",
+        "source": {
+            "descriptor_sha256": "sha256:" + "4" * 64,
+            "migration_heads": ["a000"],
+        },
+        "target_side": {
+            "descriptor_sha256": "sha256:" + "5" * 64,
+            "migration_heads": ["a000", "a001"],
+            "image_digest": "sha256:" + "6" * 64,
+            "image_source_revision": "b" * 40,
+        },
+        "backup": {
+            "bundle_digest": "deadbeef" * 8,
+            "checksum_algorithm": "sha256",
+            "size_bytes": 654321,
+            "bundle_id": "/backups/golden2.bundle",
+        },
+        "previous_receipt_digest": "sha256:" + "9" * 64,
+    }
+    receipt = TransitionReceiptV1.parse(document)
+
+    expected_canonical_bytes = (
+        b'{"backup":{"bundle_digest":"deadbeefdeadbeefdeadbeefdeadbeefdeadbeef'
+        b'deadbeefdeadbeefdeadbeef","bundle_id":"/backups/golden2.bundle",'
+        b'"checksum_algorithm":"sha256","size_bytes":654321},'
+        b'"environment":"golden-env-2",'
+        b'"previous_receipt_digest":'
+        b'"sha256:9999999999999999999999999999999999999999999999999999999999999999",'
+        b'"product":"golden-product-2","run_id":"golden-run-2",'
+        b'"schema":"DeploymentTransitionReceipt.v1",'
+        b'"source":{"descriptor_sha256":'
+        b'"sha256:4444444444444444444444444444444444444444444444444444444444444444",'
+        b'"migration_heads":["a000"]},'
+        b'"target":"golden-h\xc3\xb4te",'
+        b'"target_side":{"descriptor_sha256":'
+        b'"sha256:5555555555555555555555555555555555555555555555555555555555555555",'
+        b'"image_digest":'
+        b'"sha256:6666666666666666666666666666666666666666666666666666666666666666",'
+        b'"image_source_revision":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",'
+        b'"migration_heads":["a000","a001"]}}'
+    )
+    expected_digest = (
+        "sha256:83f2c0790494b1f90978c19dcf537c102d1b5a42d7ac632487d184b6274d04e5"
     )
 
     assert receipt.canonical_bytes() == expected_canonical_bytes

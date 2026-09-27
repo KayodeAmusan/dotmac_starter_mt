@@ -2,30 +2,44 @@
 
 ## Unreleased — successor not allocated
 
-### `verify_transition_receipt` binds run, backup and scope identity, and refuses non-canonical input
+### Added: `transition_receipt` — the Foundation's half of D16's two-sided recovery receipt
 
-**Breaking** (package is unreleased, `0.4.0a1`; signature is free to change):
-`verify_transition_receipt` gains three new required keyword parameters —
-`expected_run_id`, `expected_target`, and `genesis_source` (the last defaults
-to `None`, but exactly one of `genesis_source`/`previous_receipt` must be
-given or the receipt is refused as `CHAIN_ANCHOR_AMBIGUOUS`) — and renames
-`expected_image_digest` to `observed_image_digest`. New findings:
-`RUN_ID_MISMATCH`, `RUN_ID_REUSED`, `BACKUP_ID_MISMATCH`,
-`IMAGE_DESCRIPTOR_MISMATCH`, `ENVIRONMENT_MISMATCH`, `TARGET_MISMATCH`,
-`CHAIN_SCOPE_MISMATCH`, `CHAIN_ANCHOR_AMBIGUOUS`, `GENESIS_SOURCE_MISMATCH`,
-`OBSERVED_IMAGE_MALFORMED`, `INPUT_NOT_CANONICALIZABLE`. `TARGET_HEADS_MISSING`
-and `TARGET_HEADS_EXTRA` are replaced by direction-explicit
-`TARGET_HEADS_DECLARED_VS_SPEC`/`TARGET_HEADS_DECLARED_VS_OBSERVED`.
+New module, `DeploymentTransitionReceipt.v1`: a closed schema
+(`TransitionReceiptV1`, `TransitionSide`, `TargetSide`, `TransitionBackup`)
+and a pure verifier, `verify_transition_receipt`, for the receipt that binds
+a source-to-target deployment hop — descriptor, migration heads, the image
+running on the target, the backup it was restored from, and the run that
+performed it. `dotmac-deployment-control` produces the receipt in a later
+change; this package verifies it independently.
 
-Previously a chain's first receipt was unverifiable against anything
-(`previous_receipt=None` meant "trust the receipt's own claimed source"), a
-backup's `bundle_id` was accepted but never checked against anything, a
-receipt could hop to a different host mid-chain undetected, and `parse()`
-silently normalized a non-canonical digest spelling instead of refusing it.
-`TransitionBackup.size_bytes`, `_required` and `_validated_heads` also
-coerced malformed input (a bool `size_bytes`, a bare-string `migration_heads`)
-instead of refusing it. All fixed. `TransitionBackup.bundle_digest`'s format
-is deliberately left unconstrained — see the module docstring.
+`verify_transition_receipt(receipt, *, spec, observed_target_heads,
+previous_receipt, backup_record, observed_image_digest, expected_run_id,
+expected_target, genesis_source=None)` never raises: every disagreement
+becomes one of the closed `TransitionFinding` codes rather than an
+exception, including `INPUT_NOT_CANONICALIZABLE` for an input that cannot
+itself be canonicalized. `genesis_source` and `previous_receipt` are
+mutually exclusive and one is required (`CHAIN_ANCHOR_AMBIGUOUS` otherwise),
+anchoring a chain's first receipt to a caller-named source instead of
+trusting the receipt's own claim. A chain is scoped to one product,
+environment and target (`CHAIN_SCOPE_MISMATCH`); the run that produced a
+receipt must match what the caller actually launched and must not repeat a
+predecessor's run id (`RUN_ID_MISMATCH`/`RUN_ID_REUSED`); a backup's
+`bundle_id` binds to `BackupRecord.path` (`BACKUP_ID_MISMATCH`), its
+`checksum_algorithm` is restricted to `{sha256, sha512}`
+(`BACKUP_ALGORITHM_UNSUPPORTED`), and a record shaped like one built by
+`external_recovery.backup_record_from_receipt` (an executor identifier and a
+restore duration standing in for a real artefact id and byte count) is
+refused outright (`BACKUP_RECORD_NOT_ARTEFACT_BOUND`) rather than accepted
+on those stand-in values; the target image must match both the descriptor
+and the caller's own observation (`IMAGE_DESCRIPTOR_MISMATCH`/
+`IMAGE_DIGEST_MISMATCH`). Every digest-shaped field (`descriptor_sha256`,
+`image_digest`, `previous_receipt_digest`) and every migration head must
+already be canonical — `sha256:` plus 64 lowercase hex for a digest, no
+leading/trailing whitespace and non-empty for a head — `parse()` refuses
+rather than normalizes a differently-spelled input. Neither the verifier nor
+the parser coerces a malformed input to make it fit: a non-`int`
+`size_bytes`, a bare string or non-string element in `observed_target_heads`,
+and similar shape violations are findings, not silent casts.
 
 ### Gate-3 successor execution authority (candidate; not released)
 
