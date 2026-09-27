@@ -2,6 +2,31 @@
 
 ## Unreleased — successor not allocated
 
+### `verify_transition_receipt` binds run, backup and scope identity, and refuses non-canonical input
+
+**Breaking** (package is unreleased, `0.4.0a1`; signature is free to change):
+`verify_transition_receipt` gains three new required keyword parameters —
+`expected_run_id`, `expected_target`, and `genesis_source` (the last defaults
+to `None`, but exactly one of `genesis_source`/`previous_receipt` must be
+given or the receipt is refused as `CHAIN_ANCHOR_AMBIGUOUS`) — and renames
+`expected_image_digest` to `observed_image_digest`. New findings:
+`RUN_ID_MISMATCH`, `RUN_ID_REUSED`, `BACKUP_ID_MISMATCH`,
+`IMAGE_DESCRIPTOR_MISMATCH`, `ENVIRONMENT_MISMATCH`, `TARGET_MISMATCH`,
+`CHAIN_SCOPE_MISMATCH`, `CHAIN_ANCHOR_AMBIGUOUS`, `GENESIS_SOURCE_MISMATCH`,
+`OBSERVED_IMAGE_MALFORMED`, `INPUT_NOT_CANONICALIZABLE`. `TARGET_HEADS_MISSING`
+and `TARGET_HEADS_EXTRA` are replaced by direction-explicit
+`TARGET_HEADS_DECLARED_VS_SPEC`/`TARGET_HEADS_DECLARED_VS_OBSERVED`.
+
+Previously a chain's first receipt was unverifiable against anything
+(`previous_receipt=None` meant "trust the receipt's own claimed source"), a
+backup's `bundle_id` was accepted but never checked against anything, a
+receipt could hop to a different host mid-chain undetected, and `parse()`
+silently normalized a non-canonical digest spelling instead of refusing it.
+`TransitionBackup.size_bytes`, `_required` and `_validated_heads` also
+coerced malformed input (a bool `size_bytes`, a bare-string `migration_heads`)
+instead of refusing it. All fixed. `TransitionBackup.bundle_digest`'s format
+is deliberately left unconstrained — see the module docstring.
+
 ### Gate-3 successor execution authority (candidate; not released)
 
 `FoundationExecutionPlanV3` binds the candidate wheel, exact target,
