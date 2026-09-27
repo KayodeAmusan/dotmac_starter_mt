@@ -123,15 +123,18 @@ def _verify(
     spec: Any,
     receipt: TransitionReceiptV1,
     *,
-    observed_target_heads=None,
-    previous_receipt: TransitionReceiptV1 | None | object = _UNSET,
-    genesis_source: TransitionSide | None | object = _UNSET,
+    observed_target_heads: Any = None,
+    previous_receipt: Any = _UNSET,
+    genesis_source: Any = _UNSET,
     backup_record: BackupRecord | None = None,
     observed_image_digest: str | None = None,
     expected_run_id: str | None = None,
     expected_target: str | None = None,
-):
-    resolved_previous = None if previous_receipt is _UNSET else previous_receipt
+) -> Any:
+    resolved_previous: TransitionReceiptV1 | None = (
+        None if previous_receipt is _UNSET else previous_receipt
+    )
+    resolved_genesis: TransitionSide | None
     if genesis_source is _UNSET:
         resolved_genesis = receipt.source if resolved_previous is None else None
     else:
@@ -761,8 +764,11 @@ def test_a_size_mismatch_is_refused() -> None:
 
 
 def test_migration_heads_refuses_a_bare_string() -> None:
+    bad_heads: Any = "a000"
     with pytest.raises(SpecError, match="bare"):
-        TransitionSide(descriptor_sha256="sha256:" + "1" * 64, migration_heads="a000")
+        TransitionSide(
+            descriptor_sha256="sha256:" + "1" * 64, migration_heads=bad_heads
+        )
 
 
 def test_migration_heads_refuses_a_non_string_element() -> None:
