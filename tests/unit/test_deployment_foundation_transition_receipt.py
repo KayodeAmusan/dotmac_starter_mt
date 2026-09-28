@@ -1719,3 +1719,21 @@ def test_a_second_golden_vector_pins_non_ascii_and_a_chained_digest() -> None:
     assert receipt.canonical_bytes() == expected_canonical_bytes
     assert str(receipt.digest()) == expected_digest
     assert receipt.as_mapping() == document
+
+
+def test_parse_refuses_a_lone_surrogate() -> None:
+    """A lone surrogate passes `json.loads` but cannot be UTF-8 encoded, so it
+    would make `canonical_bytes()` (and so the verifier) raise. Refused at the
+    boundary instead; the non-ASCII golden vector is the near-miss."""
+    spec = _spec()
+    document = _valid_document(spec)
+    document["target"] = "host-\ud800"
+    with pytest.raises(SpecError, match="UTF-8"):
+        TransitionReceiptV1.parse(document)
+
+
+def test_parse_accepts_encodable_non_ascii() -> None:
+    spec = _spec()
+    document = _valid_document(spec)
+    document["target"] = "host-h\u00f4te"
+    assert TransitionReceiptV1.parse(document).target == "host-h\u00f4te"

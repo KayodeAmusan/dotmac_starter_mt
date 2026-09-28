@@ -236,6 +236,13 @@ def _required(value: object, *, where: str) -> str:
         raise SpecError(f"{where} must not have leading or trailing whitespace")
     if not text:
         raise SpecError(f"{where} is required and cannot be empty")
+    try:
+        text.encode("utf-8")
+    except UnicodeEncodeError as exc:
+        # A lone surrogate survives `json.loads` and `ensure_ascii=False`, then
+        # fails `canonical_bytes()`'s UTF-8 encode. Refusing it here keeps
+        # "parse accepts" and "canonicalizes" the same set of documents.
+        raise SpecError(f"{where} is not encodable as UTF-8") from exc
     return text
 
 
@@ -781,7 +788,7 @@ def _check_chain(
     else:
         try:
             previous_digest = str(previous_receipt.digest())
-        except SpecError:
+        except (SpecError, UnicodeEncodeError):
             findings.append(TransitionFinding.INPUT_NOT_CANONICALIZABLE)
         else:
             if receipt.previous_receipt_digest != previous_digest:
@@ -962,7 +969,7 @@ def _check_self_canonicalization(
     "cannot itself be canonicalized" check catches, closes that gap."""
     try:
         receipt.canonical_bytes()
-    except SpecError:
+    except (SpecError, UnicodeEncodeError):
         return [TransitionFinding.INPUT_NOT_CANONICALIZABLE]
     return []
 
