@@ -20,14 +20,16 @@ from unittest.mock import patch
 
 import pytest
 from dotmac_deployment_foundation.backup import ArtefactClass, Assurance, BackupRecord
-from dotmac_deployment_foundation.digest import Digest
 from dotmac_deployment_foundation.errors import SecretValueError, SpecError
 from dotmac_deployment_foundation.external_recovery import (
     EXTERNAL_BACKUP_PATH_PREFIX,
     ExternalRecoveryReceiptV1,
     backup_record_from_receipt,
 )
-from dotmac_deployment_foundation.recovery import RecoveryBundleManifestV1
+from dotmac_deployment_foundation.recovery import (
+    BundleComponent,
+    RecoveryBundleManifestV1,
+)
 from dotmac_deployment_foundation.recovery_identity import (
     DatasetIdentityV1,
     ExternalExecutorV1,
@@ -145,27 +147,44 @@ def _bundle_manifest(
     return manifest
 
 
-def _bundle_manifest_digest_hex(*, migration_head: str = _SOURCE_MIGRATION_HEAD) -> str:
-    """The manifest's OWN digest, as bare lowercase hex -- the same shape
-    `TransitionBackup.bundle_digest` uses, and the value the manifest-binding
-    check compares against (see `_check_backup`'s manifest section)."""
-    return Digest.parse(
-        _bundle_manifest(migration_head=migration_head).sha256_digest()
-    ).hex
+def _manifest_digest(*, migration_head: str = _SOURCE_MIGRATION_HEAD) -> str:
+    """The manifest's OWN canonical identity (``sha256:`` + 64 lowercase hex)
+    -- what `TransitionBackup.manifest_digest` binds to (see `_check_backup`'s
+    manifest section). Michael's 2026-09-28 correction: this used to be what
+    `bundle_digest` carried, which made a real backup (whose recorded checksum
+    is the write-time ARTEFACT checksum, not a manifest digest) unverifiable.
+    """
+    return _bundle_manifest(migration_head=migration_head).sha256_digest()
+
+
+def _database_dump_digest_hex() -> str:
+    """The manifest's own ``database_dump`` component digest, as bare
+    lowercase hex -- the same shape `TransitionBackup.bundle_digest` and
+    `BackupRecord.checksum` use, and the value the artefact-to-manifest link
+    compares against (see `_check_backup`'s manifest section). Constant across
+    every manifest this fixture builds: `_DIGEST` in
+    `test_deployment_foundation_recovery_bundle.py` maps every component to a
+    fixed value, independent of `migration_heads` -- so unlike
+    `_manifest_digest()`, this needs no `migration_head` parameter."""
+    return _bundle_manifest().component_digest(BundleComponent.DATABASE_DUMP).hex
 
 
 def _backup(
-    *, bundle_id: str = _BACKUP_PATH, bundle_digest: str | None = None
+    *,
+    bundle_id: str = _BACKUP_PATH,
+    bundle_digest: str | None = None,
+    manifest_digest: str | None = None,
 ) -> TransitionBackup:
     return TransitionBackup(
         bundle_digest=(
-            bundle_digest
-            if bundle_digest is not None
-            else _bundle_manifest_digest_hex()
+            bundle_digest if bundle_digest is not None else _database_dump_digest_hex()
         ),
         checksum_algorithm="sha256",
         size_bytes=1_000_000,
         bundle_id=bundle_id,
+        manifest_digest=(
+            manifest_digest if manifest_digest is not None else _manifest_digest()
+        ),
     )
 
 
@@ -174,7 +193,7 @@ def _backup_record(*, checksum: str | None = None) -> BackupRecord:
         dataset="primary",
         path=_BACKUP_PATH,
         size_bytes=1_000_000,
-        checksum=checksum if checksum is not None else _bundle_manifest_digest_hex(),
+        checksum=checksum if checksum is not None else _database_dump_digest_hex(),
         checksum_algorithm="sha256",
         completed_at_epoch=1_700_000_000,
         assurance=Assurance.PROVED,
@@ -297,9 +316,7 @@ def test_a_fully_valid_chain_of_two_receipts_verifies() -> None:
     spec = _spec()
     second_head = spec.migration.expected_heads[0]
     second_manifest = _bundle_manifest(migration_head=second_head)
-    second_backup = _backup(
-        bundle_digest=Digest.parse(second_manifest.sha256_digest()).hex
-    )
+    second_backup = _backup(manifest_digest=second_manifest.sha256_digest())
     first, second = _chained_second_receipt(spec, second_backup=second_backup)
 
     first_verdict = _verify(spec, first, previous_receipt=None)
@@ -979,7 +996,7 @@ def _record_at(assurance: Assurance) -> BackupRecord:
         dataset="primary",
         path=_BACKUP_PATH,
         size_bytes=1_000_000,
-        checksum=_bundle_manifest_digest_hex(),
+        checksum=_database_dump_digest_hex(),
         checksum_algorithm="sha256",
         completed_at_epoch=1_700_000_000,
         assurance=assurance,
@@ -1122,29 +1139,98 @@ def test_a_deeply_nested_payload_is_not_a_bundle() -> None:
 
 
 def test_a_manifest_digest_mismatch_is_refused() -> None:
+    """`manifest_digest` -- the manifest's own canonical identity -- not
+    `bundle_digest` (the artefact checksum, unchanged) is what this compares."""
     spec = _spec()
-    receipt = _receipt(spec, backup=_backup(bundle_digest="0" * 64))
+    receipt = _receipt(spec, backup=_backup(manifest_digest="sha256:" + "0" * 64))
     verdict = _verify(spec, receipt)
     assert TransitionFinding.BACKUP_MANIFEST_DIGEST_MISMATCH in verdict.findings
+    # near miss: bundle_digest/backup_record still agree, so the artefact
+    # link is not what is failing here -- isolating this to the manifest's
+    # own identity, not the artefact-to-manifest link.
+    assert TransitionFinding.BACKUP_ARTEFACT_NOT_IN_MANIFEST not in verdict.findings
 
     verdict_ok = _verify(spec, _receipt(spec))
     assert TransitionFinding.BACKUP_MANIFEST_DIGEST_MISMATCH not in verdict_ok.findings
 
 
+def test_an_artefact_checksum_not_matching_the_manifests_database_dump_is_refused() -> (
+    None
+):
+    """The artefact-to-manifest link: `BackupRecord.checksum` must equal the
+    manifest's own `database_dump` component digest. `bundle_digest` is set to
+    the SAME wrong value as the record's checksum, so `BACKUP_DIGEST_MISMATCH`
+    (artefact-to-record) does not also fire -- isolating this to the
+    artefact-to-MANIFEST link specifically."""
+    spec = _spec()
+    wrong_checksum = "0" * 64
+    receipt = _receipt(spec, backup=_backup(bundle_digest=wrong_checksum))
+    record = _backup_record(checksum=wrong_checksum)
+    verdict = _verify(spec, receipt, backup_record=record)
+    assert TransitionFinding.BACKUP_ARTEFACT_NOT_IN_MANIFEST in verdict.findings
+    assert TransitionFinding.BACKUP_DIGEST_MISMATCH not in verdict.findings
+    assert TransitionFinding.BACKUP_MANIFEST_DIGEST_MISMATCH not in verdict.findings
+
+    verdict_ok = _verify(spec, _receipt(spec))
+    assert TransitionFinding.BACKUP_ARTEFACT_NOT_IN_MANIFEST not in verdict_ok.findings
+
+
+def test_a_sha512_backup_cannot_be_linked_to_the_manifests_database_dump() -> None:
+    """Every manifest component digest this Foundation can express is sha256
+    (`digest.ALGORITHMS` has exactly one entry) -- so the artefact-to-manifest
+    link can only hold when the RECORD's own checksum is sha256 too. A sha512
+    dataset is an explicit, named refusal, not an impossible comparison."""
+    sha512_spec = _sha512_spec()
+    receipt = _receipt(
+        sha512_spec,
+        backup=TransitionBackup(
+            bundle_digest="c" * 128,
+            checksum_algorithm="sha512",
+            size_bytes=1_000_000,
+            bundle_id=_BACKUP_PATH,
+            manifest_digest=_manifest_digest(),
+        ),
+    )
+    record = BackupRecord(
+        dataset="primary",
+        path=_BACKUP_PATH,
+        size_bytes=1_000_000,
+        checksum="c" * 128,
+        checksum_algorithm="sha512",
+        completed_at_epoch=1_700_000_000,
+        assurance=Assurance.PROVED,
+        artefact_class=ArtefactClass.RECOVERY_BUNDLE,
+    )
+    verdict = _verify(sha512_spec, receipt, backup_record=record)
+    assert TransitionFinding.BACKUP_ALGORITHM_NOT_BUNDLE_COMPATIBLE in verdict.findings
+    assert TransitionFinding.BACKUP_ARTEFACT_NOT_IN_MANIFEST not in verdict.findings
+
+    # near miss: a sha256 record links cleanly
+    verdict_ok = _verify(_spec(), _receipt(_spec()))
+    assert (
+        TransitionFinding.BACKUP_ALGORITHM_NOT_BUNDLE_COMPATIBLE
+        not in verdict_ok.findings
+    )
+
+
 def test_a_manifest_product_mismatch_is_refused() -> None:
-    """The bundle's identity is its manifest digest (`bundle_digest` is set
-    to match the WRONG-product manifest exactly), so only the scope check --
-    not a digest mismatch -- is what catches this."""
+    """The manifest's own digest (`manifest_digest`) is set to match the
+    WRONG-product manifest exactly, and its `database_dump` component digest
+    is unchanged (only `product` was edited on the raw document, not the
+    component digests), so only the scope check -- not a digest or
+    artefact-link mismatch -- is what catches this."""
     spec = _spec()
     document = json.loads(_bundle_manifest().to_json())
     document["product"] = "a-different-product"
     wrong_manifest = RecoveryBundleManifestV1(content=document)
     receipt = _receipt(
         spec,
-        backup=_backup(bundle_digest=Digest.parse(wrong_manifest.sha256_digest()).hex),
+        backup=_backup(manifest_digest=wrong_manifest.sha256_digest()),
     )
     verdict = _verify(spec, receipt, bundle_manifest=wrong_manifest.to_json())
     assert TransitionFinding.BACKUP_MANIFEST_SCOPE_MISMATCH in verdict.findings
+    assert TransitionFinding.BACKUP_MANIFEST_DIGEST_MISMATCH not in verdict.findings
+    assert TransitionFinding.BACKUP_ARTEFACT_NOT_IN_MANIFEST not in verdict.findings
 
     verdict_ok = _verify(spec, _receipt(spec))
     assert TransitionFinding.BACKUP_MANIFEST_SCOPE_MISMATCH not in verdict_ok.findings
@@ -1159,7 +1245,7 @@ def test_a_manifest_heads_mismatch_is_refused() -> None:
     wrong_manifest = RecoveryBundleManifestV1(content=document)
     receipt = _receipt(
         spec,
-        backup=_backup(bundle_digest=Digest.parse(wrong_manifest.sha256_digest()).hex),
+        backup=_backup(manifest_digest=wrong_manifest.sha256_digest()),
     )
     verdict = _verify(spec, receipt, bundle_manifest=wrong_manifest.to_json())
     assert TransitionFinding.BACKUP_MANIFEST_SCOPE_MISMATCH in verdict.findings
@@ -1179,7 +1265,7 @@ def test_a_manifest_bound_to_the_target_heads_instead_of_source_is_refused() -> 
     wrong_manifest = _bundle_manifest(migration_head=target_head)
     receipt = _receipt(
         spec,
-        backup=_backup(bundle_digest=Digest.parse(wrong_manifest.sha256_digest()).hex),
+        backup=_backup(manifest_digest=wrong_manifest.sha256_digest()),
     )
     verdict = _verify(spec, receipt, bundle_manifest=wrong_manifest.to_json())
     assert TransitionFinding.BACKUP_MANIFEST_SCOPE_MISMATCH in verdict.findings
@@ -1313,6 +1399,7 @@ def test_an_unsupported_checksum_algorithm_is_refused() -> None:
             checksum_algorithm="md5",
             size_bytes=1_000_000,
             bundle_id=_BACKUP_PATH,
+            manifest_digest=_manifest_digest(),
         ),
     )
     record = BackupRecord(
@@ -1336,6 +1423,7 @@ def test_an_unsupported_checksum_algorithm_is_refused() -> None:
             checksum_algorithm="sha512",
             size_bytes=1_000_000,
             bundle_id=_BACKUP_PATH,
+            manifest_digest=_manifest_digest(),
         ),
     )
     sha512_record = BackupRecord(
@@ -1385,6 +1473,7 @@ def test_a_declared_dataset_algorithm_mismatch_is_refused() -> None:
             checksum_algorithm="sha256",  # the dataset declares sha512
             size_bytes=1_000_000,
             bundle_id=_BACKUP_PATH,
+            manifest_digest=_manifest_digest(),
         ),
     )
     wrong_record = BackupRecord(
@@ -1408,6 +1497,7 @@ def test_a_declared_dataset_algorithm_mismatch_is_refused() -> None:
             checksum_algorithm="sha512",
             size_bytes=1_000_000,
             bundle_id=_BACKUP_PATH,
+            manifest_digest=_manifest_digest(),
         ),
     )
     matching_record = BackupRecord(
@@ -1436,6 +1526,7 @@ def test_an_uppercase_bundle_digest_is_malformed() -> None:
             checksum_algorithm="sha256",
             size_bytes=1_000_000,
             bundle_id=_BACKUP_PATH,
+            manifest_digest=_manifest_digest(),
         ),
     )
     record = BackupRecord(
@@ -1465,6 +1556,7 @@ def test_a_wrong_length_bundle_digest_is_malformed() -> None:
             checksum_algorithm="sha256",
             size_bytes=1_000_000,
             bundle_id=_BACKUP_PATH,
+            manifest_digest=_manifest_digest(),
         ),
     )
     record = BackupRecord(
@@ -1520,6 +1612,7 @@ def test_a_record_built_by_backup_record_from_receipt_is_refused() -> None:
             checksum_algorithm=record.checksum_algorithm,
             size_bytes=record.size_bytes,
             bundle_id=record.path,
+            manifest_digest=_manifest_digest(),
         ),
     )
     verdict = _verify(spec, receipt, backup_record=record)
@@ -1547,6 +1640,7 @@ def test_a_directly_constructed_receipt_with_a_secret_shaped_field_is_refused() 
             checksum_algorithm="sha256",
             size_bytes=1_000_000,
             bundle_id=secret_shaped,
+            manifest_digest=_manifest_digest(),
         ),
     )
     record = BackupRecord(
@@ -1641,6 +1735,7 @@ def test_required_refuses_a_non_string_value() -> None:
             checksum_algorithm="sha256",
             size_bytes=1,
             bundle_id=bad_bundle_id,
+            manifest_digest="sha256:" + "1" * 64,
         )
 
 
@@ -1652,6 +1747,7 @@ def test_size_bytes_refuses_a_bool() -> None:
             checksum_algorithm="sha256",
             size_bytes=bad_size,
             bundle_id=_BACKUP_PATH,
+            manifest_digest="sha256:" + "1" * 64,
         )
 
 
@@ -1663,6 +1759,7 @@ def test_size_bytes_refuses_a_float() -> None:
             checksum_algorithm="sha256",
             size_bytes=bad_size,
             bundle_id=_BACKUP_PATH,
+            manifest_digest="sha256:" + "1" * 64,
         )
 
 
@@ -1673,6 +1770,20 @@ def test_size_bytes_refuses_negative() -> None:
             checksum_algorithm="sha256",
             size_bytes=-1,
             bundle_id=_BACKUP_PATH,
+            manifest_digest="sha256:" + "1" * 64,
+        )
+
+
+def test_manifest_digest_refuses_an_uncanonical_value() -> None:
+    """`manifest_digest` is held to the same canonical-only rule as every
+    other digest-shaped field on this receipt (see `_canonical_digest`)."""
+    with pytest.raises(SpecError, match="canonical digest"):
+        TransitionBackup(
+            bundle_digest="deadbeef" * 8,
+            checksum_algorithm="sha256",
+            size_bytes=1,
+            bundle_id=_BACKUP_PATH,
+            manifest_digest="not-a-digest",
         )
 
 
@@ -1837,6 +1948,34 @@ def test_parse_refuses_a_padded_digest() -> None:
         TransitionReceiptV1.parse(document)
 
 
+def test_parse_refuses_a_missing_manifest_digest() -> None:
+    spec = _spec()
+    document = _valid_document(spec)
+    del document["backup"]["manifest_digest"]
+    with pytest.raises(SpecError, match="missing required field"):
+        TransitionReceiptV1.parse(document)
+
+
+def test_parse_refuses_an_uppercase_manifest_digest() -> None:
+    spec = _spec()
+    document = _valid_document(spec)
+    document["backup"]["manifest_digest"] = document["backup"][
+        "manifest_digest"
+    ].upper()
+    with pytest.raises(SpecError, match="canonical digest"):
+        TransitionReceiptV1.parse(document)
+
+
+def test_parse_refuses_a_bare_hex_manifest_digest() -> None:
+    spec = _spec()
+    document = _valid_document(spec)
+    document["backup"]["manifest_digest"] = document["backup"]["manifest_digest"].split(
+        ":", 1
+    )[1]
+    with pytest.raises(SpecError, match="canonical digest"):
+        TransitionReceiptV1.parse(document)
+
+
 def test_parse_refuses_a_secret_shaped_value() -> None:
     spec = _spec()
     document = _valid_document(spec)
@@ -1877,7 +2016,17 @@ def test_the_canonical_form_matches_a_pinned_golden_vector() -> None:
     digest, both as literals — not derived from this module at test time.
     Proves a future change to key order, separators or ``ensure_ascii``
     would be caught even though every OTHER test in this file only checks
-    internal consistency (parse/as_mapping round trips)."""
+    internal consistency (parse/as_mapping round trips).
+
+    ``expected_canonical_bytes``/``expected_digest`` were re-derived for the
+    new ``manifest_digest`` field: the canonical JSON string below (with
+    ``manifest_digest`` inserted into ``backup`` at its sorted-key position,
+    between ``checksum_algorithm`` and ``size_bytes``) was hand-typed, then
+    hashed on the command line with both ``shasum -a 256`` and, independently,
+    ``openssl dgst -sha256`` — not with this module's own `hashlib`-based
+    `Digest.of`. Both agreed on
+    ``ab85a81794eced652a24bff147b6e48cf4a126952f4e5dd157f524aa24093494``.
+    """
     document = {
         "schema": TRANSITION_RECEIPT_SCHEMA,
         "product": "golden-product",
@@ -1899,6 +2048,7 @@ def test_the_canonical_form_matches_a_pinned_golden_vector() -> None:
             "checksum_algorithm": "sha256",
             "size_bytes": 123456,
             "bundle_id": "/backups/golden.bundle",
+            "manifest_digest": "sha256:" + "7" * 64,
         },
         "previous_receipt_digest": None,
     }
@@ -1907,7 +2057,9 @@ def test_the_canonical_form_matches_a_pinned_golden_vector() -> None:
     expected_canonical_bytes = (
         b'{"backup":{"bundle_digest":"deadbeefdeadbeefdeadbeefdeadbeefdeadbeef'
         b'deadbeefdeadbeefdeadbeef","bundle_id":"/backups/golden.bundle",'
-        b'"checksum_algorithm":"sha256","size_bytes":123456},'
+        b'"checksum_algorithm":"sha256","manifest_digest":'
+        b'"sha256:7777777777777777777777777777777777777777777777777777777777777777",'
+        b'"size_bytes":123456},'
         b'"environment":"golden-env","previous_receipt_digest":null,'
         b'"product":"golden-product","run_id":"golden-run-1",'
         b'"schema":"DeploymentTransitionReceipt.v1",'
@@ -1922,7 +2074,7 @@ def test_the_canonical_form_matches_a_pinned_golden_vector() -> None:
         b'"migration_heads":["a000","a001"]}}'
     )
     expected_digest = (
-        "sha256:e82d1d23035992a1541c863724b5f45e8b45e6fc32c037101337fa54580fe11a"
+        "sha256:ab85a81794eced652a24bff147b6e48cf4a126952f4e5dd157f524aa24093494"
     )
 
     assert receipt.canonical_bytes() == expected_canonical_bytes
@@ -1943,11 +2095,13 @@ def test_a_second_golden_vector_pins_non_ascii_and_a_chained_digest() -> None:
 
     ``expected_canonical_bytes``/``expected_digest`` were derived OUTSIDE
     this test and outside `transition_receipt.py`: the canonical JSON string
-    below was typed by hand (not produced by `canonical_bytes()`), written to
-    a file, and hashed with both ``shasum -a 256`` and, independently,
-    ``openssl dgst -sha256`` on the command line -- not with this module's
-    own `hashlib`-based `Digest.of`. Both external tools agreed on
-    ``83f2c0790494b1f90978c19dcf537c102d1b5a42d7ac632487d184b6274d04e5``.
+    below (with the new ``manifest_digest`` field inserted into ``backup`` at
+    its sorted-key position, between ``checksum_algorithm`` and
+    ``size_bytes``) was typed by hand (not produced by `canonical_bytes()`),
+    written to a file, and hashed with both ``shasum -a 256`` and,
+    independently, ``openssl dgst -sha256`` on the command line -- not with
+    this module's own `hashlib`-based `Digest.of`. Both external tools agreed
+    on ``68bfb7f0fa240d299c25c6e012d9f27bcbdceb1d18745e8d8314497a3e046a96``.
     """
     document = {
         "schema": TRANSITION_RECEIPT_SCHEMA,
@@ -1970,6 +2124,7 @@ def test_a_second_golden_vector_pins_non_ascii_and_a_chained_digest() -> None:
             "checksum_algorithm": "sha256",
             "size_bytes": 654321,
             "bundle_id": "/backups/golden2.bundle",
+            "manifest_digest": "sha256:" + "8" * 64,
         },
         "previous_receipt_digest": "sha256:" + "9" * 64,
     }
@@ -1978,7 +2133,9 @@ def test_a_second_golden_vector_pins_non_ascii_and_a_chained_digest() -> None:
     expected_canonical_bytes = (
         b'{"backup":{"bundle_digest":"deadbeefdeadbeefdeadbeefdeadbeefdeadbeef'
         b'deadbeefdeadbeefdeadbeef","bundle_id":"/backups/golden2.bundle",'
-        b'"checksum_algorithm":"sha256","size_bytes":654321},'
+        b'"checksum_algorithm":"sha256","manifest_digest":'
+        b'"sha256:8888888888888888888888888888888888888888888888888888888888888888",'
+        b'"size_bytes":654321},'
         b'"environment":"golden-env-2",'
         b'"previous_receipt_digest":'
         b'"sha256:9999999999999999999999999999999999999999999999999999999999999999",'
@@ -1996,7 +2153,7 @@ def test_a_second_golden_vector_pins_non_ascii_and_a_chained_digest() -> None:
         b'"migration_heads":["a000","a001"]}}'
     )
     expected_digest = (
-        "sha256:83f2c0790494b1f90978c19dcf537c102d1b5a42d7ac632487d184b6274d04e5"
+        "sha256:68bfb7f0fa240d299c25c6e012d9f27bcbdceb1d18745e8d8314497a3e046a96"
     )
 
     assert receipt.canonical_bytes() == expected_canonical_bytes

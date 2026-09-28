@@ -38,17 +38,36 @@ A backup must be a `RECOVERY_BUNDLE` at assurance `VERIFIED` or higher
 recovery bundle, not merely intact bytes — is established separately, by
 BINDING the receipt to the bundle's own manifest: the verifier calls
 `recovery.load_manifest(bundle_manifest)` (a new required keyword; pure, no
-I/O — `SpecError` becomes `BACKUP_MANIFEST_NOT_A_BUNDLE`), then checks that
-`receipt.backup.bundle_digest` equals the bundle's own identity — the hex
-part of `manifest.sha256_digest()`, the same value
-`recovery.build_recovery_receipt` stores as `bundle_digest`
-(`BACKUP_MANIFEST_DIGEST_MISMATCH`) — and that the manifest's `product` and
-sorted, de-duplicated `migration_heads` agree with `receipt.product` and
+I/O — `SpecError` becomes `BACKUP_MANIFEST_NOT_A_BUNDLE`).
+
+**Michael's 2026-09-28 correction of an earlier ruling here:** `bundle_digest`
+stays exactly what it always was — the artefact's own write-time checksum,
+bound to `BackupRecord.checksum` (`BACKUP_DIGEST_MISMATCH`) — and is NOT
+compared with the manifest's identity. The prior ruling bound `bundle_digest`
+to the manifest digest, which made a real backup (whose recorded checksum is
+the artefact checksum, never a manifest digest) unverifiable, and made a
+`sha512` dataset impossible to express against a `sha256`-only manifest
+digest. A new field, `TransitionBackup.manifest_digest` — a canonical
+`sha256:` digest, validated like every other canonical digest on this
+receipt, and now REQUIRED by `parse` — carries the manifest's own identity,
+compared against `RecoveryBundleManifestV1.sha256_digest()`
+(`BACKUP_MANIFEST_DIGEST_MISMATCH`). The artefact is linked to that manifest
+through the manifest's own `database_dump` component digest:
+`BackupRecord.checksum` must equal
+`manifest.component_digest(BundleComponent.DATABASE_DUMP).hex`
+(`BACKUP_ARTEFACT_NOT_IN_MANIFEST`). Every component digest this Foundation
+can express is `sha256` (`digest.ALGORITHMS` has exactly one entry), so that
+link can only hold when the record's own `checksum_algorithm` is `sha256`; a
+`sha512` (or any other) dataset is refused outright and by name
+(`BACKUP_ALGORITHM_NOT_BUNDLE_COMPATIBLE`) rather than compared and silently
+never matching. The manifest's `product` and sorted, de-duplicated
+`migration_heads` must still agree with `receipt.product` and
 `receipt.source.migration_heads` (the backup is of the SOURCE database,
 before migration — `BACKUP_MANIFEST_SCOPE_MISMATCH`). `VERIFIED` is then
 exactly the remaining claim that level is for: the bytes are intact. A
 disposable restore (`RESTORABLE` and above) is a separate, stronger proof
-this receipt does not claim.
+this receipt does not claim, and this receipt makes no restore-rehearsal
+claim at all.
 A backup's `bundle_id` binds to `BackupRecord.path` (`BACKUP_ID_MISMATCH`);
 its `checksum_algorithm` is restricted to `BackupDataset.CHECKSUMS`
 (`{sha256, sha512}`, imported directly from `spec.py` — `BACKUP_ALGORITHM_UNSUPPORTED`
@@ -69,7 +88,7 @@ A backup's `dataset` must name a dataset the descriptor's own
 — not merely the global allow-list — or `BACKUP_ALGORITHM_NOT_DECLARED`.
 
 Every digest-shaped field (`descriptor_sha256`, `image_digest`,
-`previous_receipt_digest`) and every migration head — DECLARED and OBSERVED
+`previous_receipt_digest`, `manifest_digest`) and every migration head — DECLARED and OBSERVED
 alike — must already be canonical: `sha256:` plus 64 lowercase hex for a
 digest, no leading/trailing whitespace and non-empty for a head. `parse()`
 refuses rather than normalizes a differently-spelled input, and the verifier
