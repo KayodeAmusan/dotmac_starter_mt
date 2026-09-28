@@ -12,6 +12,7 @@ tree passes for the wrong reason.
 
 from __future__ import annotations
 
+import dataclasses
 import json
 from pathlib import Path
 from typing import Any
@@ -47,6 +48,9 @@ from tests.unit.test_deployment_foundation_recovery_bundle import (
     PRODUCT as _BUNDLE_PRODUCT,
 )
 from tests.unit.test_deployment_foundation_recovery_bundle import (
+    _evidence as _recovery_bundle_evidence,
+)
+from tests.unit.test_deployment_foundation_recovery_bundle import (
     _manifest as _build_recovery_bundle_manifest,
 )
 
@@ -80,15 +84,21 @@ def _descriptor_digest(spec: ProductDeploymentSpec) -> str:
     return spec.to_canonical_document().sha256_digest()
 
 
+#: The default SOURCE migration head -- an earlier revision than the
+#: target's `spec.migration.expected_heads` ("a003"), so the default fixture
+#: is a real migration (source at one head, target landing at a later one)
+#: rather than a no-op hop that happens to leave the head unchanged. The
+#: shared bundle-manifest fixture, `_bundle_manifest()`, declares this same
+#: head by default -- see `_verify`'s default `bundle_manifest`.
+_SOURCE_MIGRATION_HEAD = "a002"
+
+
 def _source(spec: ProductDeploymentSpec) -> TransitionSide:
-    """The default source side. ``migration_heads`` matches
-    ``spec.migration.expected_heads`` (which the shared bundle-manifest
-    fixture, `_bundle_manifest()`, also declares) so the default receipt is
-    bound to that manifest cleanly -- see ``_verify``'s default
-    ``bundle_manifest``."""
+    """The default source side, at `_SOURCE_MIGRATION_HEAD` -- distinct from
+    the target's `spec.migration.expected_heads`."""
     return TransitionSide(
         descriptor_sha256="sha256:" + "1" * 64,
-        migration_heads=tuple(spec.migration.expected_heads),
+        migration_heads=(_SOURCE_MIGRATION_HEAD,),
     )
 
 
@@ -111,24 +121,37 @@ def _target_side(
 _BACKUP_PATH = "/backups/starter.bundle"
 
 
-def _bundle_manifest() -> RecoveryBundleManifestV1:
+def _bundle_manifest(
+    *, migration_head: str = _SOURCE_MIGRATION_HEAD
+) -> RecoveryBundleManifestV1:
     """A REAL, whole recovery-bundle manifest, from the Foundation's own
     fixture (`test_deployment_foundation_recovery_bundle.py`) rather than a
     hand-rolled document: its `product` ("dotmac_starter_mt") matches the
-    real descriptor's `spec.product`, and its one migration head ("a003")
-    matches `spec.migration.expected_heads` -- both asserted below so this
-    coupling fails loudly if either fixture ever drifts."""
-    manifest = _build_recovery_bundle_manifest()
+    real descriptor's `spec.product` (asserted below, so this coupling fails
+    loudly if that fixture's product ever drifts).
+
+    ``migration_head`` overrides that fixture's own hard-coded "a003" --
+    which is the TARGET's head, not the source's -- via
+    ``dataclasses.replace`` on its evidence, so a manifest can be built for
+    whatever head a test's SOURCE side actually declares. The default,
+    `_SOURCE_MIGRATION_HEAD`, matches `_source()`'s own default.
+    """
     assert _BUNDLE_PRODUCT == "dotmac_starter_mt"
-    assert manifest.migration_heads == ("a003",)
+    evidence = dataclasses.replace(
+        _recovery_bundle_evidence(), migration_heads=(migration_head,)
+    )
+    manifest = _build_recovery_bundle_manifest(evidence=evidence)
+    assert manifest.migration_heads == (migration_head,)
     return manifest
 
 
-def _bundle_manifest_digest_hex() -> str:
+def _bundle_manifest_digest_hex(*, migration_head: str = _SOURCE_MIGRATION_HEAD) -> str:
     """The manifest's OWN digest, as bare lowercase hex -- the same shape
     `TransitionBackup.bundle_digest` uses, and the value the manifest-binding
     check compares against (see `_check_backup`'s manifest section)."""
-    return Digest.parse(_bundle_manifest().sha256_digest()).hex
+    return Digest.parse(
+        _bundle_manifest(migration_head=migration_head).sha256_digest()
+    ).hex
 
 
 def _backup(
@@ -233,13 +256,18 @@ def _verify(
 
 
 def _chained_second_receipt(
-    spec: ProductDeploymentSpec,
+    spec: ProductDeploymentSpec, *, second_backup: TransitionBackup | None = None
 ) -> tuple[TransitionReceiptV1, TransitionReceiptV1]:
     """A first receipt and a second whose source is the first's target.
 
     Both hops stay on ONE host: a chain is per product, environment and
     target (see the module docstring), so a genuine continuation of the chain
-    never changes the host.
+    never changes the host. The second hop's source is therefore the
+    target's head ("a003"), not the generic default source head
+    (`_SOURCE_MIGRATION_HEAD`, "a002") -- most callers don't care (they only
+    assert a specific finding, not a fully clean verdict) and get the
+    generic default `_backup()`; a caller that needs the second receipt's
+    own backup to be bound cleanly passes `second_backup` explicitly.
     """
     first = _receipt(spec)
     second_source = TransitionSide(
@@ -251,6 +279,7 @@ def _chained_second_receipt(
         run_id="run-2",
         target=first.target,
         source=second_source,
+        backup=second_backup if second_backup is not None else _backup(),
         previous_receipt_digest=str(first.digest()),
     )
     return first, second
@@ -260,14 +289,29 @@ def _chained_second_receipt(
 
 
 def test_a_fully_valid_chain_of_two_receipts_verifies() -> None:
+    """A real two-hop migration: the first receipt's source is at
+    `_SOURCE_MIGRATION_HEAD` ("a002") and lands at the target's
+    `spec.migration.expected_heads` ("a003"); the second receipt's source is
+    that same "a003" -- its own backup must therefore be bound to a manifest
+    at "a003", not the generic "a002" default."""
     spec = _spec()
-    first, second = _chained_second_receipt(spec)
+    second_head = spec.migration.expected_heads[0]
+    second_manifest = _bundle_manifest(migration_head=second_head)
+    second_backup = _backup(
+        bundle_digest=Digest.parse(second_manifest.sha256_digest()).hex
+    )
+    first, second = _chained_second_receipt(spec, second_backup=second_backup)
 
     first_verdict = _verify(spec, first, previous_receipt=None)
     assert first_verdict.outcome is TransitionOutcome.VERIFIED
     assert first_verdict.findings == ()
 
-    second_verdict = _verify(spec, second, previous_receipt=first)
+    second_verdict = _verify(
+        spec,
+        second,
+        previous_receipt=first,
+        bundle_manifest=second_manifest.to_json(),
+    )
     assert second_verdict.outcome is TransitionOutcome.VERIFIED
     assert second_verdict.findings == ()
 
@@ -1004,6 +1048,79 @@ def test_a_non_str_bundle_manifest_is_a_finding_not_a_coercion() -> None:
     assert TransitionFinding.INPUT_NOT_CANONICALIZABLE not in verdict_ok.findings
 
 
+# ── never-raises on the manifest path (each shape a finding, never a crash) ──
+
+
+def test_an_int_migration_heads_is_not_a_bundle() -> None:
+    spec = _spec()
+    receipt = _receipt(spec)
+    document = json.loads(_bundle_manifest().to_json())
+    document["migration_heads"] = 5
+    verdict = _verify(spec, receipt, bundle_manifest=json.dumps(document))
+    assert TransitionFinding.BACKUP_MANIFEST_NOT_A_BUNDLE in verdict.findings
+
+    verdict_ok = _verify(spec, receipt)
+    assert TransitionFinding.BACKUP_MANIFEST_NOT_A_BUNDLE not in verdict_ok.findings
+
+
+def test_a_null_migration_heads_is_not_a_bundle() -> None:
+    spec = _spec()
+    receipt = _receipt(spec)
+    document = json.loads(_bundle_manifest().to_json())
+    document["migration_heads"] = None
+    verdict = _verify(spec, receipt, bundle_manifest=json.dumps(document))
+    assert TransitionFinding.BACKUP_MANIFEST_NOT_A_BUNDLE in verdict.findings
+
+    verdict_ok = _verify(spec, receipt)
+    assert TransitionFinding.BACKUP_MANIFEST_NOT_A_BUNDLE not in verdict_ok.findings
+
+
+def test_an_object_migration_heads_is_not_a_bundle() -> None:
+    """A dict is iterable (its keys), so this would NOT raise if the code
+    merely iterated it instead of checking its shape -- exactly the silent
+    wrong-shape acceptance the explicit `isinstance(..., list)` check exists
+    to refuse."""
+    spec = _spec()
+    receipt = _receipt(spec)
+    document = json.loads(_bundle_manifest().to_json())
+    document["migration_heads"] = {"a003": 1}
+    verdict = _verify(spec, receipt, bundle_manifest=json.dumps(document))
+    assert TransitionFinding.BACKUP_MANIFEST_NOT_A_BUNDLE in verdict.findings
+
+    verdict_ok = _verify(spec, receipt)
+    assert TransitionFinding.BACKUP_MANIFEST_NOT_A_BUNDLE not in verdict_ok.findings
+
+
+def test_a_lone_surrogate_product_is_not_a_bundle() -> None:
+    """A lone surrogate is a valid Python `str` (passes the `isinstance`
+    check) but cannot be UTF-8 encoded -- `manifest.sha256_digest()` raises
+    `UnicodeEncodeError` re-encoding it, which the manifest section must
+    catch rather than propagate."""
+    spec = _spec()
+    receipt = _receipt(spec)
+    document = json.loads(_bundle_manifest().to_json())
+    document["product"] = "PRODUCT_PLACEHOLDER"
+    raw = json.dumps(document).replace('"PRODUCT_PLACEHOLDER"', '"\\ud800"')
+    verdict = _verify(spec, receipt, bundle_manifest=raw)
+    assert TransitionFinding.BACKUP_MANIFEST_NOT_A_BUNDLE in verdict.findings
+
+    verdict_ok = _verify(spec, receipt)
+    assert TransitionFinding.BACKUP_MANIFEST_NOT_A_BUNDLE not in verdict_ok.findings
+
+
+def test_a_deeply_nested_payload_is_not_a_bundle() -> None:
+    """A pathologically nested payload can raise `RecursionError` out of the
+    JSON parser itself, before `load_manifest` ever gets to its own
+    `SpecError` refusals -- this must be caught too."""
+    spec = _spec()
+    receipt = _receipt(spec)
+    verdict = _verify(spec, receipt, bundle_manifest="[" * 100_000)
+    assert TransitionFinding.BACKUP_MANIFEST_NOT_A_BUNDLE in verdict.findings
+
+    verdict_ok = _verify(spec, receipt)
+    assert TransitionFinding.BACKUP_MANIFEST_NOT_A_BUNDLE not in verdict_ok.findings
+
+
 def test_a_manifest_digest_mismatch_is_refused() -> None:
     spec = _spec()
     receipt = _receipt(spec, backup=_backup(bundle_digest="0" * 64))
@@ -1040,6 +1157,26 @@ def test_a_manifest_heads_mismatch_is_refused() -> None:
     document = json.loads(_bundle_manifest().to_json())
     document["migration_heads"] = ["zzzz"]
     wrong_manifest = RecoveryBundleManifestV1(content=document)
+    receipt = _receipt(
+        spec,
+        backup=_backup(bundle_digest=Digest.parse(wrong_manifest.sha256_digest()).hex),
+    )
+    verdict = _verify(spec, receipt, bundle_manifest=wrong_manifest.to_json())
+    assert TransitionFinding.BACKUP_MANIFEST_SCOPE_MISMATCH in verdict.findings
+
+    verdict_ok = _verify(spec, _receipt(spec))
+    assert TransitionFinding.BACKUP_MANIFEST_SCOPE_MISMATCH not in verdict_ok.findings
+
+
+def test_a_manifest_bound_to_the_target_heads_instead_of_source_is_refused() -> None:
+    """Survivor-killer distinct from the "zzzz" test above: a manifest whose
+    head is a REAL head in this transition -- just the TARGET's, not the
+    SOURCE's -- must still be refused. Accepting it would describe a bundle
+    already migrated, not the pre-migration backup this receipt claims."""
+    spec = _spec()
+    target_head = spec.migration.expected_heads[0]
+    assert target_head != _SOURCE_MIGRATION_HEAD
+    wrong_manifest = _bundle_manifest(migration_head=target_head)
     receipt = _receipt(
         spec,
         backup=_backup(bundle_digest=Digest.parse(wrong_manifest.sha256_digest()).hex),

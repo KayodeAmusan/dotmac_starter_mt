@@ -973,26 +973,52 @@ def _check_backup(
     if not isinstance(bundle_manifest, str | bytes):
         findings.append(TransitionFinding.INPUT_NOT_CANONICALIZABLE)
     else:
+        # Every step below -- parsing, reading a property, hashing -- is
+        # untrusted-input handling over a caller-supplied document, and every
+        # one of these exception types is a real, reachable failure mode
+        # (not merely a defensive guess): `load_manifest` raises `SpecError`
+        # on a malformed document; a pathologically nested payload can blow
+        # the parser's recursion limit (`RecursionError`) before `SpecError`
+        # is even reached; `.sha256_digest()` re-encodes the content to UTF-8
+        # and a lone surrogate in a string field raises `UnicodeEncodeError`
+        # (a `ValueError` subclass, listed by name anyway for the same reason
+        # the caller's instructions name it explicitly); and `TypeError`/
+        # `ValueError` cover a shape this function's own checks below did not
+        # anticipate. All of it becomes one finding, never a raise.
         try:
             manifest = load_manifest(bundle_manifest)
-        except SpecError:
-            findings.append(TransitionFinding.BACKUP_MANIFEST_NOT_A_BUNDLE)
-        else:
+            manifest_product = manifest.content.get("product")
+            manifest_heads_raw = manifest.content.get("migration_heads")
+            if not isinstance(manifest_product, str):
+                raise SpecError("manifest product must be a string")
+            if not isinstance(manifest_heads_raw, list) or not all(
+                isinstance(head, str) for head in manifest_heads_raw
+            ):
+                raise SpecError("manifest migration_heads must be a list of strings")
             # A bundle's identity IS its manifest digest -- the same value
             # `recovery.build_recovery_receipt` stores as `bundle_digest`
             # (manifest.sha256_digest()). That value is always `sha256:`
             # prefixed (Digest.of's one algorithm); `.hex` strips the prefix
             # to compare against this receipt's bare-hex `bundle_digest`.
-            manifest_hex = Digest.parse(manifest.sha256_digest()).hex
-            if receipt.backup.bundle_digest != manifest_hex:
+            manifest_digest_hex = Digest.parse(manifest.sha256_digest()).hex
+            manifest_heads = tuple(sorted(set(manifest_heads_raw)))
+        except (
+            SpecError,
+            TypeError,
+            ValueError,
+            UnicodeEncodeError,
+            RecursionError,
+        ):
+            findings.append(TransitionFinding.BACKUP_MANIFEST_NOT_A_BUNDLE)
+        else:
+            if receipt.backup.bundle_digest != manifest_digest_hex:
                 findings.append(TransitionFinding.BACKUP_MANIFEST_DIGEST_MISMATCH)
             # The backup is of the SOURCE database, before this transition's
             # migration runs -- so it is `receipt.source`, not
             # `receipt.target_side`, that the manifest's own scope must agree
             # with.
-            manifest_heads = tuple(sorted(set(manifest.migration_heads)))
             if (
-                manifest.product != receipt.product
+                manifest_product != receipt.product
                 or manifest_heads != receipt.source.migration_heads
             ):
                 findings.append(TransitionFinding.BACKUP_MANIFEST_SCOPE_MISMATCH)
