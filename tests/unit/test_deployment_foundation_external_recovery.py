@@ -997,9 +997,9 @@ def test_no_receipt_handling_module_hides_a_call_behind_dynamic_resolution() -> 
         for module, source in _receipt_modules().items()
         for line, api, scope in unresolvable_sites(source)
     ]
-    assert not offenders, (
-        f"unresolvable construct in receipt-handling code: {offenders}"
-    )
+    assert (
+        not offenders
+    ), f"unresolvable construct in receipt-handling code: {offenders}"
 
 
 @pytest.mark.parametrize(
