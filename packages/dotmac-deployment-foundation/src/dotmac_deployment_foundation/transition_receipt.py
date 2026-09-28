@@ -472,7 +472,9 @@ class TransitionBackup:
     nothing more — Michael's 2026-09-28 correction of an earlier ruling here
     that bound this field to the bundle manifest's digest, which made a real
     backup (whose recorded checksum is the write-time artefact checksum, not
-    a manifest digest) unverifiable and a sha512 dataset impossible to express.
+    a manifest digest) unverifiable. A sha512 dataset still cannot verify a
+    bundle-backed receipt: it is refused by name, because the manifest's
+    component digests are sha256-only.
 
     ``manifest_digest`` is the separate field that carries the bundle
     manifest's own identity: a canonical ``sha256:`` digest, compared against
