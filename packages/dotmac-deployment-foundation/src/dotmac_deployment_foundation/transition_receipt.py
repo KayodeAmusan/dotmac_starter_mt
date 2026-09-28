@@ -22,7 +22,10 @@ descriptor (``spec``), the independently observed target state
 (``observed_target_heads``), the chain's previous link (``previous_receipt``)
 and the backup record. A type that could validate its own correctness against
 nothing would always pass, which is why ``verify_transition_receipt`` exists as
-a separate, pure function over all five inputs and returns a
+a separate, pure function over its nine parameters (``receipt``, ``spec``,
+``observed_target_heads``, ``previous_receipt``, ``genesis_source``,
+``backup_record``, ``observed_image_digest``, ``expected_run_id``,
+``expected_target``) and returns a
 :class:`TransitionVerdict` — never raises — naming every way the receipt
 disagrees with the world, the same shape :func:`recovery.verify_recovery`
 uses for the same reason: an operator who sees one refusal at a time repairs
@@ -687,6 +690,8 @@ class TransitionFinding(str, Enum):
     BACKUP_DIGEST_MISMATCH = "backup_digest_mismatch"
     BACKUP_DIGEST_MALFORMED = "backup_digest_malformed"
     BACKUP_ALGORITHM_UNSUPPORTED = "backup_algorithm_unsupported"
+    BACKUP_DATASET_NOT_DECLARED = "backup_dataset_not_declared"
+    BACKUP_ALGORITHM_NOT_DECLARED = "backup_algorithm_not_declared"
     BACKUP_SIZE_MISMATCH = "backup_size_mismatch"
     BACKUP_RECORD_NOT_ARTEFACT_BOUND = "backup_record_not_artefact_bound"
     PRODUCT_MISMATCH = "product_mismatch"
@@ -769,16 +774,21 @@ def _check_chain(
         # an `assert` (no asserts in src) so this stays a finding, never a
         # crash, even if that invariant is ever broken by a future edit.
         return [TransitionFinding.CHAIN_ANCHOR_AMBIGUOUS]
-    if receipt.previous_receipt_digest is None:
-        return [TransitionFinding.CHAIN_PREVIOUS_MISSING]
+
     findings = []
-    try:
-        previous_digest = str(previous_receipt.digest())
-    except SpecError:
-        findings.append(TransitionFinding.INPUT_NOT_CANONICALIZABLE)
+    if receipt.previous_receipt_digest is None:
+        findings.append(TransitionFinding.CHAIN_PREVIOUS_MISSING)
     else:
-        if receipt.previous_receipt_digest != previous_digest:
-            findings.append(TransitionFinding.CHAIN_DIGEST_MISMATCH)
+        try:
+            previous_digest = str(previous_receipt.digest())
+        except SpecError:
+            findings.append(TransitionFinding.INPUT_NOT_CANONICALIZABLE)
+        else:
+            if receipt.previous_receipt_digest != previous_digest:
+                findings.append(TransitionFinding.CHAIN_DIGEST_MISMATCH)
+    # Source-vs-previous-target is independent of whether a digest was named
+    # at all -- report it too rather than stopping at CHAIN_PREVIOUS_MISSING,
+    # per the "report every finding" rule.
     previous_target = previous_receipt.target_side
     if (
         receipt.source.descriptor_sha256 != previous_target.descriptor_sha256
@@ -791,27 +801,40 @@ def _check_chain(
 def _check_target_heads(
     receipt: TransitionReceiptV1, spec: Any, observed_target_heads: object
 ) -> list[TransitionFinding]:
-    if isinstance(observed_target_heads, str | bytes) or not isinstance(
-        observed_target_heads, Sequence
-    ):
-        return [TransitionFinding.INPUT_NOT_CANONICALIZABLE]
-    observed_list: list[str] = []
-    for head in observed_target_heads:
-        if not isinstance(head, str) or not head:
-            return [TransitionFinding.INPUT_NOT_CANONICALIZABLE]
-        observed_list.append(head)
     findings: list[TransitionFinding] = []
-    if len(set(observed_list)) != len(observed_list):
-        findings.append(TransitionFinding.TARGET_HEADS_DUPLICATE)
     declared = set(receipt.target_side.migration_heads)
     # `spec.migration.expected_heads` is already `tuple[str, ...]` (parsed by
     # `Migration.parse`'s `table.str_list(...)`) -- no `str()` coercion needed.
     expected = set(spec.migration.expected_heads)
-    observed = set(observed_list)
+    # Declared-vs-spec needs neither `observed_target_heads` nor its shape, so
+    # it still runs even when the observed side below is unusable.
     if declared != expected:
         findings.append(TransitionFinding.TARGET_HEADS_DECLARED_VS_SPEC)
-    if declared != observed:
-        findings.append(TransitionFinding.TARGET_HEADS_DECLARED_VS_OBSERVED)
+
+    observed_list: list[str] | None = None
+    if not (
+        isinstance(observed_target_heads, str | bytes)
+        or not isinstance(observed_target_heads, Sequence)
+    ):
+        collected: list[str] = []
+        malformed = False
+        for head in observed_target_heads:
+            # Held to the same standard as a DECLARED head (`_required`): a
+            # non-string, empty, or padded element is refused, not coerced.
+            if not isinstance(head, str) or not head or head != head.strip():
+                malformed = True
+                break
+            collected.append(head)
+        if not malformed:
+            observed_list = collected
+    if observed_list is None:
+        findings.append(TransitionFinding.INPUT_NOT_CANONICALIZABLE)
+    else:
+        if len(set(observed_list)) != len(observed_list):
+            findings.append(TransitionFinding.TARGET_HEADS_DUPLICATE)
+        observed = set(observed_list)
+        if declared != observed:
+            findings.append(TransitionFinding.TARGET_HEADS_DECLARED_VS_OBSERVED)
     return findings
 
 
@@ -855,17 +878,41 @@ def _check_image(
     return findings
 
 
+def _declared_dataset(spec: Any, code: str) -> Any | None:
+    for dataset in spec.backup_datasets:
+        if dataset.code == code:
+            return dataset
+    return None
+
+
 def _check_backup(
-    receipt: TransitionReceiptV1, backup_record: BackupRecord
+    receipt: TransitionReceiptV1, spec: Any, backup_record: BackupRecord
 ) -> list[TransitionFinding]:
     findings: list[TransitionFinding] = []
-    if backup_record.artefact_class is not ArtefactClass.RECOVERY_BUNDLE:
+
+    # `BackupRecord` is a plain dataclass with no runtime type enforcement on
+    # these fields (see backup.py), so a caller assembling one from external
+    # data can hand this function anything. Each is checked before use, and
+    # every comparison below that NEEDS a malformed field is skipped rather
+    # than raising -- see the module docstring's "never raises" section.
+    path_ok = isinstance(backup_record.path, str)
+    assurance_ok = isinstance(backup_record.assurance, Assurance)
+    artefact_class_ok = isinstance(backup_record.artefact_class, ArtefactClass)
+    checksum_ok = isinstance(backup_record.checksum, str)
+    dataset_ok = isinstance(backup_record.dataset, str)
+    for ok in (path_ok, assurance_ok, artefact_class_ok, checksum_ok, dataset_ok):
+        if not ok:
+            findings.append(TransitionFinding.INPUT_NOT_CANONICALIZABLE)
+
+    if artefact_class_ok and backup_record.artefact_class is not (
+        ArtefactClass.RECOVERY_BUNDLE
+    ):
         findings.append(TransitionFinding.BACKUP_NOT_RECOVERY_BUNDLE)
-    if backup_record.assurance.rank < Assurance.VERIFIED.rank:
+    if assurance_ok and backup_record.assurance.rank < Assurance.VERIFIED.rank:
         findings.append(TransitionFinding.BACKUP_ASSURANCE_TOO_LOW)
-    if receipt.backup.bundle_id != backup_record.path:
+    if path_ok and receipt.backup.bundle_id != backup_record.path:
         findings.append(TransitionFinding.BACKUP_ID_MISMATCH)
-    if (
+    if checksum_ok and (
         backup_record.checksum != receipt.backup.bundle_digest
         or backup_record.checksum_algorithm != receipt.backup.checksum_algorithm
     ):
@@ -883,7 +930,16 @@ def _check_backup(
         findings.append(TransitionFinding.INPUT_NOT_CANONICALIZABLE)
     elif record_size != receipt.backup.size_bytes:
         findings.append(TransitionFinding.BACKUP_SIZE_MISMATCH)
-    if backup_record.path.startswith(EXTERNAL_BACKUP_PATH_PREFIX):
+    if dataset_ok:
+        declared = _declared_dataset(spec, backup_record.dataset)
+        if declared is None:
+            findings.append(TransitionFinding.BACKUP_DATASET_NOT_DECLARED)
+        elif (
+            declared.checksum != receipt.backup.checksum_algorithm
+            or declared.checksum != backup_record.checksum_algorithm
+        ):
+            findings.append(TransitionFinding.BACKUP_ALGORITHM_NOT_DECLARED)
+    if path_ok and backup_record.path.startswith(EXTERNAL_BACKUP_PATH_PREFIX):
         findings.append(TransitionFinding.BACKUP_RECORD_NOT_ARTEFACT_BOUND)
     return findings
 
@@ -891,6 +947,23 @@ def _check_backup(
 def _check_product(receipt: TransitionReceiptV1, spec: Any) -> list[TransitionFinding]:
     if receipt.product != str(spec.product):
         return [TransitionFinding.PRODUCT_MISMATCH]
+    return []
+
+
+def _check_self_canonicalization(
+    receipt: TransitionReceiptV1,
+) -> list[TransitionFinding]:
+    """A receipt built directly (not through :meth:`TransitionReceiptV1.parse`)
+    never ran ``require_no_secrets`` at construction — only ``as_mapping()``
+    runs it, on every call, and nothing in the checks above calls it. Without
+    this check a directly-constructed receipt carrying a secret-shaped field
+    (say, a ``bundle_id`` chosen to also satisfy ``BACKUP_ID_MISMATCH``) would
+    verify clean. Catching ``SpecError`` here, the same family every other
+    "cannot itself be canonicalized" check catches, closes that gap."""
+    try:
+        receipt.canonical_bytes()
+    except SpecError:
+        return [TransitionFinding.INPUT_NOT_CANONICALIZABLE]
     return []
 
 
@@ -923,13 +996,14 @@ def verify_transition_receipt(
     every way the receipt is wrong at once rather than one refusal per re-run.
     """
     findings: list[TransitionFinding] = []
+    findings.extend(_check_self_canonicalization(receipt))
     findings.extend(_check_run_identity(receipt, expected_run_id, previous_receipt))
     findings.extend(_check_scope(receipt, spec, expected_target, previous_receipt))
     findings.extend(_check_chain(receipt, previous_receipt, genesis_source))
     findings.extend(_check_target_heads(receipt, spec, observed_target_heads))
     findings.extend(_check_target_descriptor(receipt, spec))
     findings.extend(_check_image(receipt, spec, observed_image_digest))
-    findings.extend(_check_backup(receipt, backup_record))
+    findings.extend(_check_backup(receipt, spec, backup_record))
     findings.extend(_check_product(receipt, spec))
     outcome = TransitionOutcome.REFUSED if findings else TransitionOutcome.VERIFIED
     return TransitionVerdict(outcome=outcome, findings=tuple(findings))
