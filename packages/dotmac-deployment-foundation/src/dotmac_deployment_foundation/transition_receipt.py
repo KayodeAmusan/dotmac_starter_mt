@@ -5,7 +5,8 @@
 Recovery needs a receipt that binds BOTH sides of a source-to-target
 transition: the previous descriptor and migration heads it left from, the
 target descriptor, heads and image digest it landed on, the backup id,
-checksum and size the target was restored from, and the run identity that
+checksum and size of the backup taken of the source before migration, and
+the run identity that
 performed it. Michael's ruling (D16) splits the work: `dotmac-deployment-control`
 PRODUCES the receipt, in a later CP change. This module is only the
 Foundation's half — a pure, product-agnostic, zero-dependency VERIFIER and the
@@ -125,7 +126,8 @@ declared checkpoints) and the terminal evidence that one database's result and
 descriptor promotion agree. This module's :class:`TransitionReceiptV1` is
 broader and host-scoped rather than database-scoped: it binds a whole
 deployment host's source-to-target hop — descriptor, migration heads, the
-image it now runs, the backup it was restored from, and the run that did it —
+image it now runs, the backup taken of the source before migration, and the
+run that did it —
 so D16 recovery can verify a promotion or rollback across everything that
 moved, not only the database. The two receipts are produced by different
 actors for different questions and neither reads the other; a deployment that
@@ -148,22 +150,22 @@ serialization in a golden-vector test rather than merely testing that
 ## Parsing accepts canonical input only
 
 ``parse`` and the ``__post_init__`` of every sub-shape refuse a digest-shaped
-field (a descriptor digest, the target image digest, or
-``previous_receipt_digest``) that is not ALREADY exactly ``sha256:`` followed
-by 64 lowercase hex characters, and refuse any string field carrying leading
-or trailing whitespace. This module does not silently normalize a
-differently-spelled digest into its canonical form the way :class:`Digest`
-does for other callers (see ``digest.py``): a receipt is evidence a chain of
-custody depends on, so accepting an uppercase or bare-hex spelling here and
-rewriting it would let a byte-for-byte comparison against an externally-signed
-or previously-hashed copy of the same receipt silently diverge. A producer
-that emits anything else is refused at the boundary rather than accommodated.
-:func:`verify_transition_receipt`'s ``observed_image_digest`` — not receipt
-content, but an external observation — is held to the identical canonical
-rule (``OBSERVED_IMAGE_MALFORMED`` for anything else), for the same reason:
-normalizing the caller's spelling before comparing would hide the exact
-spelling drift a byte-for-byte match exists to catch.
-"""
+field (a descriptor digest, the target image digest, the backup's
+``manifest_digest``, or ``previous_receipt_digest``) that is not ALREADY
+exactly ``sha256:`` followed by 64 lowercase hex characters, and refuse any
+string field carrying leading or trailing whitespace. This module does not
+silently normalize a differently-spelled digest into its canonical form the
+way :class:`Digest` does for other callers (see ``digest.py``): a receipt is
+evidence a chain of custody depends on, so accepting an uppercase or bare-hex
+spelling here and rewriting it would let a byte-for-byte comparison against an
+externally-signed or previously-hashed copy of the same receipt silently
+diverge. A producer that emits anything else is refused at the boundary rather
+than accommodated. :func:`verify_transition_receipt`'s
+``observed_image_digest`` — not receipt content, but an external observation —
+is held to the identical canonical rule (``OBSERVED_IMAGE_MALFORMED`` for
+anything else), for the same reason: normalizing the caller's spelling before
+comparing would hide the exact spelling drift a byte-for-byte match exists to
+catch."""
 
 from __future__ import annotations
 
@@ -446,7 +448,14 @@ class TargetSide:
 
 @dataclasses.dataclass(frozen=True, slots=True)
 class TransitionBackup:
-    """The backup a target was restored from, as the receipt names it.
+    """The backup taken of the SOURCE database before migration, as the
+    receipt names it. It records recovery material; it claims no restore.
+
+    For a RECOVERY_BUNDLE, the backup record's ``path`` and ``checksum`` name
+    the bundle's ``database_dump`` archive file: its write-time checksum is
+    what links it to the manifest's ``database_dump`` component. No producer
+    in this package writes such a record yet; a producer must follow this
+    contract.
 
     ``bundle_digest`` is deliberately NOT run through :class:`Digest`, and is
     NOT required to be canonical ``sha256:``-prefixed form the way the other
@@ -1025,6 +1034,7 @@ def _check_backup(
             ):
                 raise SpecError("manifest migration_heads must be a list of strings")
             manifest_heads = tuple(sorted(set(manifest_heads_raw)))
+            manifest_digest = manifest.sha256_digest()
         except (
             SpecError,
             TypeError,
@@ -1037,9 +1047,9 @@ def _check_backup(
             # The manifest's own identity is its canonical digest -- compared
             # against the receipt's separate `manifest_digest` field, NOT
             # `bundle_digest` (which stays bound to the artefact's own
-            # write-time checksum, above). See the module docstring's "Why
-            # round 5 was wrong".
-            if receipt.backup.manifest_digest != manifest.sha256_digest():
+            # write-time checksum, above). The digest is computed inside the
+            # guard above, so a manifest that cannot be encoded is a finding.
+            if receipt.backup.manifest_digest != manifest_digest:
                 findings.append(TransitionFinding.BACKUP_MANIFEST_DIGEST_MISMATCH)
             # The artefact is linked to the manifest through the manifest's
             # own `database_dump` component digest -- the one piece of the
@@ -1113,7 +1123,7 @@ def verify_transition_receipt(
     the prior link in the chain, ``genesis_source`` is where the chain
     actually starts (exactly one of the two is given — see the module
     docstring's "Genesis is anchored, never inferred"), ``backup_record`` is
-    the caller's own evidence about the backup the target was restored from,
+    the caller's own evidence about the backup taken of the source,
     ``bundle_manifest`` is that backup's own recovery-bundle manifest
     document (see :func:`recovery.load_manifest`) — the caller's classification
     of the record as a ``RECOVERY_BUNDLE`` is a label; this is what backs it,

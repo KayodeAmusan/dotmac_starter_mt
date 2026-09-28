@@ -8,8 +8,8 @@ New module, `DeploymentTransitionReceipt.v1`: a closed schema
 (`TransitionReceiptV1`, `TransitionSide`, `TargetSide`, `TransitionBackup`)
 and a pure verifier, `verify_transition_receipt`, for the receipt that binds
 a source-to-target deployment hop — descriptor, migration heads, the image
-running on the target, the backup it was restored from, and the run that
-performed it. `dotmac-deployment-control` produces the receipt in a later
+running on the target, the backup taken of the source before migration, and
+the run that performed it. The receipt claims no restore. `dotmac-deployment-control` produces the receipt in a later
 change; this package verifies it independently.
 
 `verify_transition_receipt(receipt, *, spec, observed_target_heads,
@@ -45,9 +45,10 @@ stays exactly what it always was — the artefact's own write-time checksum,
 bound to `BackupRecord.checksum` (`BACKUP_DIGEST_MISMATCH`) — and is NOT
 compared with the manifest's identity. The prior ruling bound `bundle_digest`
 to the manifest digest, which made a real backup (whose recorded checksum is
-the artefact checksum, never a manifest digest) unverifiable, and made a
-`sha512` dataset impossible to express against a `sha256`-only manifest
-digest. A new field, `TransitionBackup.manifest_digest` — a canonical
+the artefact checksum, never a manifest digest) unverifiable. A `sha512`
+dataset still cannot verify a bundle-backed receipt: the manifest's component
+digests are `sha256`-only, so such a record is refused by name
+(`BACKUP_ALGORITHM_NOT_BUNDLE_COMPATIBLE`). A new field, `TransitionBackup.manifest_digest` — a canonical
 `sha256:` digest, validated like every other canonical digest on this
 receipt, and now REQUIRED by `parse` — carries the manifest's own identity,
 compared against `RecoveryBundleManifestV1.sha256_digest()`
@@ -55,7 +56,9 @@ compared against `RecoveryBundleManifestV1.sha256_digest()`
 through the manifest's own `database_dump` component digest:
 `BackupRecord.checksum` must equal
 `manifest.component_digest(BundleComponent.DATABASE_DUMP).hex`
-(`BACKUP_ARTEFACT_NOT_IN_MANIFEST`). Every component digest this Foundation
+(`BACKUP_ARTEFACT_NOT_IN_MANIFEST`). For a RECOVERY_BUNDLE, the record's
+`path` and `checksum` therefore name the `database_dump` archive file. No
+producer in this package writes such a record yet. Every component digest this Foundation
 can express is `sha256` (`digest.ALGORITHMS` has exactly one entry), so that
 link can only hold when the record's own `checksum_algorithm` is `sha256`; a
 `sha512` (or any other) dataset is refused outright and by name
