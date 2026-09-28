@@ -1163,7 +1163,10 @@ def test_an_artefact_checksum_not_matching_the_manifests_database_dump_is_refuse
     (artefact-to-record) does not also fire -- isolating this to the
     artefact-to-MANIFEST link specifically."""
     spec = _spec()
-    wrong_checksum = "0" * 64
+    # Not "0" * 64: the shared manifest fixture's `database_dump` digest IS
+    # 64 zeros (component index 0), which would make this match.
+    wrong_checksum = "ab" * 32
+    assert wrong_checksum != _database_dump_digest_hex()
     receipt = _receipt(spec, backup=_backup(bundle_digest=wrong_checksum))
     record = _backup_record(checksum=wrong_checksum)
     verdict = _verify(spec, receipt, backup_record=record)
