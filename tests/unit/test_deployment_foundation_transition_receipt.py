@@ -19,12 +19,14 @@ from unittest.mock import patch
 
 import pytest
 from dotmac_deployment_foundation.backup import ArtefactClass, Assurance, BackupRecord
+from dotmac_deployment_foundation.digest import Digest
 from dotmac_deployment_foundation.errors import SecretValueError, SpecError
 from dotmac_deployment_foundation.external_recovery import (
     EXTERNAL_BACKUP_PATH_PREFIX,
     ExternalRecoveryReceiptV1,
     backup_record_from_receipt,
 )
+from dotmac_deployment_foundation.recovery import RecoveryBundleManifestV1
 from dotmac_deployment_foundation.recovery_identity import (
     DatasetIdentityV1,
     ExternalExecutorV1,
@@ -39,6 +41,13 @@ from dotmac_deployment_foundation.transition_receipt import (
     TransitionReceiptV1,
     TransitionSide,
     verify_transition_receipt,
+)
+
+from tests.unit.test_deployment_foundation_recovery_bundle import (
+    PRODUCT as _BUNDLE_PRODUCT,
+)
+from tests.unit.test_deployment_foundation_recovery_bundle import (
+    _manifest as _build_recovery_bundle_manifest,
 )
 
 REAL_DESCRIPTOR = (
@@ -72,9 +81,14 @@ def _descriptor_digest(spec: ProductDeploymentSpec) -> str:
 
 
 def _source(spec: ProductDeploymentSpec) -> TransitionSide:
+    """The default source side. ``migration_heads`` matches
+    ``spec.migration.expected_heads`` (which the shared bundle-manifest
+    fixture, `_bundle_manifest()`, also declares) so the default receipt is
+    bound to that manifest cleanly -- see ``_verify``'s default
+    ``bundle_manifest``."""
     return TransitionSide(
         descriptor_sha256="sha256:" + "1" * 64,
-        migration_heads=("a000",),
+        migration_heads=tuple(spec.migration.expected_heads),
     )
 
 
@@ -97,21 +111,47 @@ def _target_side(
 _BACKUP_PATH = "/backups/starter.bundle"
 
 
-def _backup(*, bundle_id: str = _BACKUP_PATH) -> TransitionBackup:
+def _bundle_manifest() -> RecoveryBundleManifestV1:
+    """A REAL, whole recovery-bundle manifest, from the Foundation's own
+    fixture (`test_deployment_foundation_recovery_bundle.py`) rather than a
+    hand-rolled document: its `product` ("dotmac_starter_mt") matches the
+    real descriptor's `spec.product`, and its one migration head ("a003")
+    matches `spec.migration.expected_heads` -- both asserted below so this
+    coupling fails loudly if either fixture ever drifts."""
+    manifest = _build_recovery_bundle_manifest()
+    assert _BUNDLE_PRODUCT == "dotmac_starter_mt"
+    assert manifest.migration_heads == ("a003",)
+    return manifest
+
+
+def _bundle_manifest_digest_hex() -> str:
+    """The manifest's OWN digest, as bare lowercase hex -- the same shape
+    `TransitionBackup.bundle_digest` uses, and the value the manifest-binding
+    check compares against (see `_check_backup`'s manifest section)."""
+    return Digest.parse(_bundle_manifest().sha256_digest()).hex
+
+
+def _backup(
+    *, bundle_id: str = _BACKUP_PATH, bundle_digest: str | None = None
+) -> TransitionBackup:
     return TransitionBackup(
-        bundle_digest="deadbeef" * 8,
+        bundle_digest=(
+            bundle_digest
+            if bundle_digest is not None
+            else _bundle_manifest_digest_hex()
+        ),
         checksum_algorithm="sha256",
         size_bytes=1_000_000,
         bundle_id=bundle_id,
     )
 
 
-def _backup_record() -> BackupRecord:
+def _backup_record(*, checksum: str | None = None) -> BackupRecord:
     return BackupRecord(
         dataset="primary",
         path=_BACKUP_PATH,
         size_bytes=1_000_000,
-        checksum="deadbeef" * 8,
+        checksum=checksum if checksum is not None else _bundle_manifest_digest_hex(),
         checksum_algorithm="sha256",
         completed_at_epoch=1_700_000_000,
         assurance=Assurance.PROVED,
@@ -149,6 +189,7 @@ def _verify(
     previous_receipt: Any = _UNSET,
     genesis_source: Any = _UNSET,
     backup_record: BackupRecord | None = None,
+    bundle_manifest: Any = _UNSET,
     observed_image_digest: str | None = None,
     expected_run_id: str | None = None,
     expected_target: str | None = None,
@@ -166,6 +207,9 @@ def _verify(
         if observed_target_heads is _UNSET
         else observed_target_heads
     )
+    resolved_manifest: Any = (
+        _bundle_manifest().to_json() if bundle_manifest is _UNSET else bundle_manifest
+    )
     return verify_transition_receipt(
         receipt,
         spec=spec,
@@ -173,6 +217,7 @@ def _verify(
         previous_receipt=resolved_previous,
         genesis_source=resolved_genesis,
         backup_record=backup_record if backup_record is not None else _backup_record(),
+        bundle_manifest=resolved_manifest,
         observed_image_digest=(
             observed_image_digest
             if observed_image_digest is not None
@@ -890,7 +935,7 @@ def _record_at(assurance: Assurance) -> BackupRecord:
         dataset="primary",
         path=_BACKUP_PATH,
         size_bytes=1_000_000,
-        checksum="deadbeef" * 8,
+        checksum=_bundle_manifest_digest_hex(),
         checksum_algorithm="sha256",
         completed_at_epoch=1_700_000_000,
         assurance=assurance,
@@ -898,29 +943,112 @@ def _record_at(assurance: Assurance) -> BackupRecord:
     )
 
 
-def test_backup_assurance_below_restorable_is_refused() -> None:
+def test_an_intact_bundle_at_verified_with_a_bound_manifest_verifies_clean() -> None:
+    """Michael's 2026-09-28 correction of the prior RESTORABLE ruling: the
+    floor is VERIFIED, not RESTORABLE. Completeness comes from the manifest
+    BINDING (item 2), not from a higher assurance level -- a disposable
+    restore (RESTORABLE and above) is a separate, stronger proof this
+    receipt does not claim. Fully clean positive control for that ruling: a
+    RECOVERY_BUNDLE record at exactly VERIFIED, bound to a real, whole
+    manifest, verifies with zero findings."""
+    spec = _spec()
+    receipt = _receipt(spec)
+    verdict = _verify(spec, receipt, backup_record=_record_at(Assurance.VERIFIED))
+    assert verdict.outcome is TransitionOutcome.VERIFIED
+    assert verdict.findings == ()
+
+
+def test_backup_assurance_below_verified_is_refused() -> None:
     spec = _spec()
     receipt = _receipt(spec)
     verdict = _verify(spec, receipt, backup_record=_record_at(Assurance.COMPLETED))
     assert TransitionFinding.BACKUP_ASSURANCE_TOO_LOW in verdict.findings
 
+    verdict_ok = _verify(spec, receipt, backup_record=_record_at(Assurance.VERIFIED))
+    assert TransitionFinding.BACKUP_ASSURANCE_TOO_LOW not in verdict_ok.findings
 
-def test_a_verified_backup_is_refused_because_intact_bytes_are_not_a_bundle() -> None:
-    """VERIFIED means the bytes are intact; RESTORABLE means the artefact is a
-    complete recovery bundle. A transition's recovery path needs the latter."""
+
+def test_a_manifest_missing_a_required_component_is_not_a_bundle() -> None:
     spec = _spec()
     receipt = _receipt(spec)
-    verdict = _verify(spec, receipt, backup_record=_record_at(Assurance.VERIFIED))
-    assert TransitionFinding.BACKUP_ASSURANCE_TOO_LOW in verdict.findings
+    document = json.loads(_bundle_manifest().to_json())
+    first_component = next(iter(document["components"]))
+    del document["components"][first_component]
+    verdict = _verify(spec, receipt, bundle_manifest=json.dumps(document))
+    assert TransitionFinding.BACKUP_MANIFEST_NOT_A_BUNDLE in verdict.findings
+
+    verdict_ok = _verify(spec, receipt)
+    assert TransitionFinding.BACKUP_MANIFEST_NOT_A_BUNDLE not in verdict_ok.findings
 
 
-def test_a_restorable_backup_meets_the_assurance_floor() -> None:
-    """The near-miss: RESTORABLE is enough. It does not claim a rehearsed
-    restore (PROVED), and the verifier does not require one."""
+def test_a_non_manifest_payload_is_not_a_bundle() -> None:
+    """A `pg_dump` custom-format archive is not a manifest -- `load_manifest`
+    refuses it on shape rather than on how a restore later looks."""
     spec = _spec()
     receipt = _receipt(spec)
-    verdict = _verify(spec, receipt, backup_record=_record_at(Assurance.RESTORABLE))
-    assert TransitionFinding.BACKUP_ASSURANCE_TOO_LOW not in verdict.findings
+    verdict = _verify(spec, receipt, bundle_manifest=b"PGDMP-not-json-at-all")
+    assert TransitionFinding.BACKUP_MANIFEST_NOT_A_BUNDLE in verdict.findings
+
+    verdict_ok = _verify(spec, receipt)
+    assert TransitionFinding.BACKUP_MANIFEST_NOT_A_BUNDLE not in verdict_ok.findings
+
+
+def test_a_non_str_bundle_manifest_is_a_finding_not_a_coercion() -> None:
+    spec = _spec()
+    receipt = _receipt(spec)
+    bad_manifest: Any = 12345
+    verdict = _verify(spec, receipt, bundle_manifest=bad_manifest)
+    assert TransitionFinding.INPUT_NOT_CANONICALIZABLE in verdict.findings
+
+    verdict_ok = _verify(spec, receipt)
+    assert TransitionFinding.INPUT_NOT_CANONICALIZABLE not in verdict_ok.findings
+
+
+def test_a_manifest_digest_mismatch_is_refused() -> None:
+    spec = _spec()
+    receipt = _receipt(spec, backup=_backup(bundle_digest="0" * 64))
+    verdict = _verify(spec, receipt)
+    assert TransitionFinding.BACKUP_MANIFEST_DIGEST_MISMATCH in verdict.findings
+
+    verdict_ok = _verify(spec, _receipt(spec))
+    assert TransitionFinding.BACKUP_MANIFEST_DIGEST_MISMATCH not in verdict_ok.findings
+
+
+def test_a_manifest_product_mismatch_is_refused() -> None:
+    """The bundle's identity is its manifest digest (`bundle_digest` is set
+    to match the WRONG-product manifest exactly), so only the scope check --
+    not a digest mismatch -- is what catches this."""
+    spec = _spec()
+    document = json.loads(_bundle_manifest().to_json())
+    document["product"] = "a-different-product"
+    wrong_manifest = RecoveryBundleManifestV1(content=document)
+    receipt = _receipt(
+        spec,
+        backup=_backup(bundle_digest=Digest.parse(wrong_manifest.sha256_digest()).hex),
+    )
+    verdict = _verify(spec, receipt, bundle_manifest=wrong_manifest.to_json())
+    assert TransitionFinding.BACKUP_MANIFEST_SCOPE_MISMATCH in verdict.findings
+
+    verdict_ok = _verify(spec, _receipt(spec))
+    assert TransitionFinding.BACKUP_MANIFEST_SCOPE_MISMATCH not in verdict_ok.findings
+
+
+def test_a_manifest_heads_mismatch_is_refused() -> None:
+    """The backup is of the SOURCE database before migration -- so this
+    compares against `receipt.source.migration_heads`, not the target's."""
+    spec = _spec()
+    document = json.loads(_bundle_manifest().to_json())
+    document["migration_heads"] = ["zzzz"]
+    wrong_manifest = RecoveryBundleManifestV1(content=document)
+    receipt = _receipt(
+        spec,
+        backup=_backup(bundle_digest=Digest.parse(wrong_manifest.sha256_digest()).hex),
+    )
+    verdict = _verify(spec, receipt, bundle_manifest=wrong_manifest.to_json())
+    assert TransitionFinding.BACKUP_MANIFEST_SCOPE_MISMATCH in verdict.findings
+
+    verdict_ok = _verify(spec, _receipt(spec))
+    assert TransitionFinding.BACKUP_MANIFEST_SCOPE_MISMATCH not in verdict_ok.findings
 
 
 def test_a_backup_id_not_matching_the_records_path_is_refused() -> None:

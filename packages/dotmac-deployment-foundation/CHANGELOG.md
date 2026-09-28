@@ -13,9 +13,9 @@ performed it. `dotmac-deployment-control` produces the receipt in a later
 change; this package verifies it independently.
 
 `verify_transition_receipt(receipt, *, spec, observed_target_heads,
-previous_receipt, backup_record, observed_image_digest, expected_run_id,
-expected_target, genesis_source=None)` never raises: every disagreement
-becomes one of the closed `TransitionFinding` codes rather than an
+previous_receipt, backup_record, bundle_manifest, observed_image_digest,
+expected_run_id, expected_target, genesis_source=None)` never raises: every
+disagreement becomes one of the closed `TransitionFinding` codes rather than an
 exception, including `INPUT_NOT_CANONICALIZABLE` for an input that cannot
 itself be canonicalized. `genesis_source` and `previous_receipt` are
 mutually exclusive and one is required (`CHAIN_ANCHOR_AMBIGUOUS` otherwise),
@@ -33,10 +33,22 @@ source revision must be well-formed 40-lowercase-hex (`IMAGE_REVISION_INVALID`)
 AND match the descriptor's own `source_revision` (`IMAGE_REVISION_DESCRIPTOR_MISMATCH`)
 — a receipt is not evidence about which commit is running unless both hold.
 
-A backup must be a `RECOVERY_BUNDLE` at assurance `RESTORABLE` or higher
-(`BACKUP_ASSURANCE_TOO_LOW`): `VERIFIED` only says the bytes are intact, and a
-transition's recovery path needs a complete bundle. This does not require, or
-claim, a rehearsed restore (`PROVED`).
+A backup must be a `RECOVERY_BUNDLE` at assurance `VERIFIED` or higher
+(`BACKUP_ASSURANCE_TOO_LOW`). Completeness — that the artefact is a whole
+recovery bundle, not merely intact bytes — is established separately, by
+BINDING the receipt to the bundle's own manifest: the verifier calls
+`recovery.load_manifest(bundle_manifest)` (a new required keyword; pure, no
+I/O — `SpecError` becomes `BACKUP_MANIFEST_NOT_A_BUNDLE`), then checks that
+`receipt.backup.bundle_digest` equals the bundle's own identity — the hex
+part of `manifest.sha256_digest()`, the same value
+`recovery.build_recovery_receipt` stores as `bundle_digest`
+(`BACKUP_MANIFEST_DIGEST_MISMATCH`) — and that the manifest's `product` and
+sorted, de-duplicated `migration_heads` agree with `receipt.product` and
+`receipt.source.migration_heads` (the backup is of the SOURCE database,
+before migration — `BACKUP_MANIFEST_SCOPE_MISMATCH`). `VERIFIED` is then
+exactly the remaining claim that level is for: the bytes are intact. A
+disposable restore (`RESTORABLE` and above) is a separate, stronger proof
+this receipt does not claim.
 A backup's `bundle_id` binds to `BackupRecord.path` (`BACKUP_ID_MISMATCH`);
 its `checksum_algorithm` is restricted to `BackupDataset.CHECKSUMS`
 (`{sha256, sha512}`, imported directly from `spec.py` — `BACKUP_ALGORITHM_UNSUPPORTED`
