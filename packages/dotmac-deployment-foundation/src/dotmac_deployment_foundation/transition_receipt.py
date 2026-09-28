@@ -22,10 +22,10 @@ descriptor (``spec``), the independently observed target state
 (``observed_target_heads``), the chain's previous link (``previous_receipt``)
 and the backup record. A type that could validate its own correctness against
 nothing would always pass, which is why ``verify_transition_receipt`` exists as
-a separate, pure function over its nine parameters (``receipt``, ``spec``,
+a separate, pure function over its ten parameters (``receipt``, ``spec``,
 ``observed_target_heads``, ``previous_receipt``, ``genesis_source``,
-``backup_record``, ``observed_image_digest``, ``expected_run_id``,
-``expected_target``) and returns a
+``backup_record``, ``bundle_manifest``, ``observed_image_digest``,
+``expected_run_id``, ``expected_target``) and returns a
 :class:`TransitionVerdict` — never raises — naming every way the receipt
 disagrees with the world, the same shape :func:`recovery.verify_recovery`
 uses for the same reason: an operator who sees one refusal at a time repairs
@@ -178,6 +178,7 @@ from .backup import ArtefactClass, Assurance, BackupRecord
 from .digest import Digest
 from .errors import SpecError
 from .external_recovery import EXTERNAL_BACKUP_PATH_PREFIX
+from .recovery import load_manifest
 from .secrets_guard import require_no_secrets
 from .spec import BackupDataset
 
@@ -701,6 +702,9 @@ class TransitionFinding(str, Enum):
     BACKUP_ALGORITHM_NOT_DECLARED = "backup_algorithm_not_declared"
     BACKUP_SIZE_MISMATCH = "backup_size_mismatch"
     BACKUP_RECORD_NOT_ARTEFACT_BOUND = "backup_record_not_artefact_bound"
+    BACKUP_MANIFEST_NOT_A_BUNDLE = "backup_manifest_not_a_bundle"
+    BACKUP_MANIFEST_DIGEST_MISMATCH = "backup_manifest_digest_mismatch"
+    BACKUP_MANIFEST_SCOPE_MISMATCH = "backup_manifest_scope_mismatch"
     PRODUCT_MISMATCH = "product_mismatch"
     INPUT_NOT_CANONICALIZABLE = "input_not_canonicalizable"
 
@@ -893,7 +897,10 @@ def _declared_dataset(spec: Any, code: str) -> Any | None:
 
 
 def _check_backup(
-    receipt: TransitionReceiptV1, spec: Any, backup_record: BackupRecord
+    receipt: TransitionReceiptV1,
+    spec: Any,
+    backup_record: BackupRecord,
+    bundle_manifest: object,
 ) -> list[TransitionFinding]:
     findings: list[TransitionFinding] = []
 
@@ -915,11 +922,15 @@ def _check_backup(
         ArtefactClass.RECOVERY_BUNDLE
     ):
         findings.append(TransitionFinding.BACKUP_NOT_RECOVERY_BUNDLE)
-    # RESTORABLE, not VERIFIED: VERIFIED says only that the bytes are intact,
-    # while RESTORABLE says the artefact is a complete recovery bundle, which
-    # is what a transition's recovery path depends on. Neither claims that a
-    # restore was rehearsed (that is PROVED).
-    if assurance_ok and backup_record.assurance.rank < Assurance.RESTORABLE.rank:
+    # VERIFIED, not RESTORABLE (Michael's 2026-09-28 correction of the prior
+    # ruling here, which conflated two distinct facts). Completeness -- that
+    # the artefact is a whole recovery bundle, not merely intact bytes -- is
+    # established below by BINDING the receipt to the bundle's own manifest
+    # (see the manifest checks), not by the assurance level. VERIFIED is then
+    # exactly the remaining claim this level is FOR: the bytes are intact.
+    # A disposable restore (RESTORABLE and above) is a separate, stronger
+    # proof this receipt does not make.
+    if assurance_ok and backup_record.assurance.rank < Assurance.VERIFIED.rank:
         findings.append(TransitionFinding.BACKUP_ASSURANCE_TOO_LOW)
     if path_ok and receipt.backup.bundle_id != backup_record.path:
         findings.append(TransitionFinding.BACKUP_ID_MISMATCH)
@@ -952,6 +963,39 @@ def _check_backup(
             findings.append(TransitionFinding.BACKUP_ALGORITHM_NOT_DECLARED)
     if path_ok and backup_record.path.startswith(EXTERNAL_BACKUP_PATH_PREFIX):
         findings.append(TransitionFinding.BACKUP_RECORD_NOT_ARTEFACT_BOUND)
+
+    # The classification above (RECOVERY_BUNDLE) is a label on the RECORD; it
+    # is not backed by anything until it is bound to the bundle's own
+    # manifest. `load_manifest` is pure (JSON parsing only, no I/O) and is
+    # the Foundation's one answer to "is this artefact a whole bundle" --
+    # see its own docstring on why an incomplete bundle is refused on shape
+    # rather than graded.
+    if not isinstance(bundle_manifest, str | bytes):
+        findings.append(TransitionFinding.INPUT_NOT_CANONICALIZABLE)
+    else:
+        try:
+            manifest = load_manifest(bundle_manifest)
+        except SpecError:
+            findings.append(TransitionFinding.BACKUP_MANIFEST_NOT_A_BUNDLE)
+        else:
+            # A bundle's identity IS its manifest digest -- the same value
+            # `recovery.build_recovery_receipt` stores as `bundle_digest`
+            # (manifest.sha256_digest()). That value is always `sha256:`
+            # prefixed (Digest.of's one algorithm); `.hex` strips the prefix
+            # to compare against this receipt's bare-hex `bundle_digest`.
+            manifest_hex = Digest.parse(manifest.sha256_digest()).hex
+            if receipt.backup.bundle_digest != manifest_hex:
+                findings.append(TransitionFinding.BACKUP_MANIFEST_DIGEST_MISMATCH)
+            # The backup is of the SOURCE database, before this transition's
+            # migration runs -- so it is `receipt.source`, not
+            # `receipt.target_side`, that the manifest's own scope must agree
+            # with.
+            manifest_heads = tuple(sorted(set(manifest.migration_heads)))
+            if (
+                manifest.product != receipt.product
+                or manifest_heads != receipt.source.migration_heads
+            ):
+                findings.append(TransitionFinding.BACKUP_MANIFEST_SCOPE_MISMATCH)
     return findings
 
 
@@ -985,6 +1029,7 @@ def verify_transition_receipt(
     observed_target_heads: Sequence[str],
     previous_receipt: TransitionReceiptV1 | None,
     backup_record: BackupRecord,
+    bundle_manifest: str | bytes,
     observed_image_digest: str,
     expected_run_id: str,
     expected_target: str,
@@ -999,6 +1044,9 @@ def verify_transition_receipt(
     actually starts (exactly one of the two is given — see the module
     docstring's "Genesis is anchored, never inferred"), ``backup_record`` is
     the caller's own evidence about the backup the target was restored from,
+    ``bundle_manifest`` is that backup's own recovery-bundle manifest
+    document (see :func:`recovery.load_manifest`) — the caller's classification
+    of the record as a ``RECOVERY_BUNDLE`` is a label; this is what backs it,
     ``observed_image_digest`` is what the caller actually observed running,
     and ``expected_run_id``/``expected_target`` are the run and target the
     caller actually launched. Never raises: every disagreement, including an
@@ -1014,7 +1062,7 @@ def verify_transition_receipt(
     findings.extend(_check_target_heads(receipt, spec, observed_target_heads))
     findings.extend(_check_target_descriptor(receipt, spec))
     findings.extend(_check_image(receipt, spec, observed_image_digest))
-    findings.extend(_check_backup(receipt, spec, backup_record))
+    findings.extend(_check_backup(receipt, spec, backup_record, bundle_manifest))
     findings.extend(_check_product(receipt, spec))
     outcome = TransitionOutcome.REFUSED if findings else TransitionOutcome.VERIFIED
     return TransitionVerdict(outcome=outcome, findings=tuple(findings))
