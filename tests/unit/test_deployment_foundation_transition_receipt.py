@@ -885,24 +885,42 @@ def test_a_data_export_backup_is_refused() -> None:
     assert TransitionFinding.BACKUP_NOT_RECOVERY_BUNDLE not in verdict_ok.findings
 
 
-def test_backup_assurance_below_verified_is_refused() -> None:
-    spec = _spec()
-    receipt = _receipt(spec)
-    record = BackupRecord(
+def _record_at(assurance: Assurance) -> BackupRecord:
+    return BackupRecord(
         dataset="primary",
         path=_BACKUP_PATH,
         size_bytes=1_000_000,
         checksum="deadbeef" * 8,
         checksum_algorithm="sha256",
         completed_at_epoch=1_700_000_000,
-        assurance=Assurance.COMPLETED,
+        assurance=assurance,
         artefact_class=ArtefactClass.RECOVERY_BUNDLE,
     )
-    verdict = _verify(spec, receipt, backup_record=record)
+
+
+def test_backup_assurance_below_restorable_is_refused() -> None:
+    spec = _spec()
+    receipt = _receipt(spec)
+    verdict = _verify(spec, receipt, backup_record=_record_at(Assurance.COMPLETED))
     assert TransitionFinding.BACKUP_ASSURANCE_TOO_LOW in verdict.findings
 
-    verdict_ok = _verify(spec, receipt)
-    assert TransitionFinding.BACKUP_ASSURANCE_TOO_LOW not in verdict_ok.findings
+
+def test_a_verified_backup_is_refused_because_intact_bytes_are_not_a_bundle() -> None:
+    """VERIFIED means the bytes are intact; RESTORABLE means the artefact is a
+    complete recovery bundle. A transition's recovery path needs the latter."""
+    spec = _spec()
+    receipt = _receipt(spec)
+    verdict = _verify(spec, receipt, backup_record=_record_at(Assurance.VERIFIED))
+    assert TransitionFinding.BACKUP_ASSURANCE_TOO_LOW in verdict.findings
+
+
+def test_a_restorable_backup_meets_the_assurance_floor() -> None:
+    """The near-miss: RESTORABLE is enough. It does not claim a rehearsed
+    restore (PROVED), and the verifier does not require one."""
+    spec = _spec()
+    receipt = _receipt(spec)
+    verdict = _verify(spec, receipt, backup_record=_record_at(Assurance.RESTORABLE))
+    assert TransitionFinding.BACKUP_ASSURANCE_TOO_LOW not in verdict.findings
 
 
 def test_a_backup_id_not_matching_the_records_path_is_refused() -> None:

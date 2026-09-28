@@ -915,7 +915,11 @@ def _check_backup(
         ArtefactClass.RECOVERY_BUNDLE
     ):
         findings.append(TransitionFinding.BACKUP_NOT_RECOVERY_BUNDLE)
-    if assurance_ok and backup_record.assurance.rank < Assurance.VERIFIED.rank:
+    # RESTORABLE, not VERIFIED: VERIFIED says only that the bytes are intact,
+    # while RESTORABLE says the artefact is a complete recovery bundle, which
+    # is what a transition's recovery path depends on. Neither claims that a
+    # restore was rehearsed (that is PROVED).
+    if assurance_ok and backup_record.assurance.rank < Assurance.RESTORABLE.rank:
         findings.append(TransitionFinding.BACKUP_ASSURANCE_TOO_LOW)
     if path_ok and receipt.backup.bundle_id != backup_record.path:
         findings.append(TransitionFinding.BACKUP_ID_MISMATCH)

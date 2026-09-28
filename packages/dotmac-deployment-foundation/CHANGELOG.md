@@ -33,6 +33,10 @@ source revision must be well-formed 40-lowercase-hex (`IMAGE_REVISION_INVALID`)
 AND match the descriptor's own `source_revision` (`IMAGE_REVISION_DESCRIPTOR_MISMATCH`)
 — a receipt is not evidence about which commit is running unless both hold.
 
+A backup must be a `RECOVERY_BUNDLE` at assurance `RESTORABLE` or higher
+(`BACKUP_ASSURANCE_TOO_LOW`): `VERIFIED` only says the bytes are intact, and a
+transition's recovery path needs a complete bundle. This does not require, or
+claim, a rehearsed restore (`PROVED`).
 A backup's `bundle_id` binds to `BackupRecord.path` (`BACKUP_ID_MISMATCH`);
 its `checksum_algorithm` is restricted to `BackupDataset.CHECKSUMS`
 (`{sha256, sha512}`, imported directly from `spec.py` — `BACKUP_ALGORITHM_UNSUPPORTED`
