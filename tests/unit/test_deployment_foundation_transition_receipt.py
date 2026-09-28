@@ -56,6 +56,17 @@ def _spec() -> ProductDeploymentSpec:
     return ProductDeploymentSpec.loads(REAL_DESCRIPTOR, source="<test>")
 
 
+def _sha512_spec() -> ProductDeploymentSpec:
+    """The real descriptor with its one backup dataset's declared
+    ``checksum`` changed from ``sha256`` to ``sha512`` -- built by patching
+    the real text (everything else about the descriptor stays real) rather
+    than fabricated from scratch, so a per-dataset algorithm mismatch can be
+    tested against an actually-declared sha512 dataset."""
+    text = REAL_DESCRIPTOR.replace('checksum = "sha256"', 'checksum = "sha512"')
+    assert text.count('checksum = "sha512"') == 1
+    return ProductDeploymentSpec.loads(text, source="<test-sha512>")
+
+
 def _descriptor_digest(spec: ProductDeploymentSpec) -> str:
     return spec.to_canonical_document().sha256_digest()
 
@@ -97,7 +108,7 @@ def _backup(*, bundle_id: str = _BACKUP_PATH) -> TransitionBackup:
 
 def _backup_record() -> BackupRecord:
     return BackupRecord(
-        dataset="starter-db",
+        dataset="primary",
         path=_BACKUP_PATH,
         size_bytes=1_000_000,
         checksum="deadbeef" * 8,
@@ -294,6 +305,26 @@ def test_a_non_first_receipt_without_one_is_refused() -> None:
     _, correct_second = _chained_second_receipt(spec)
     verdict_ok = _verify(spec, correct_second, previous_receipt=first)
     assert TransitionFinding.CHAIN_PREVIOUS_MISSING not in verdict_ok.findings
+
+
+def test_chain_source_mismatch_still_reports_when_previous_digest_is_missing() -> None:
+    """A later check that does not depend on the missing digest keeps
+    running instead of an early return suppressing it."""
+    spec = _spec()
+    first, _ = _chained_second_receipt(spec)
+    missing_and_wrong_source = _receipt(
+        spec,
+        run_id="run-2",
+        target=first.target,
+        source=TransitionSide(
+            descriptor_sha256="sha256:" + "7" * 64,
+            migration_heads=("a000",),
+        ),
+        previous_receipt_digest=None,
+    )
+    verdict = _verify(spec, missing_and_wrong_source, previous_receipt=first)
+    assert TransitionFinding.CHAIN_PREVIOUS_MISSING in verdict.findings
+    assert TransitionFinding.CHAIN_SOURCE_MISMATCH in verdict.findings
 
 
 def test_a_chain_hop_to_a_different_host_is_refused() -> None:
@@ -594,6 +625,10 @@ def test_a_heads_only_chain_source_mismatch_is_refused() -> None:
     verdict = _verify(spec, wrong_heads_only, previous_receipt=first)
     assert TransitionFinding.CHAIN_SOURCE_MISMATCH in verdict.findings
 
+    _, correct_second = _chained_second_receipt(spec)
+    verdict_ok = _verify(spec, correct_second, previous_receipt=first)
+    assert TransitionFinding.CHAIN_SOURCE_MISMATCH not in verdict_ok.findings
+
 
 def test_none_observed_heads_is_a_finding_not_a_coercion() -> None:
     """The 'never coerces' claim: `None` is not silently `str()`-ed."""
@@ -629,6 +664,49 @@ def test_a_non_string_observed_head_element_is_a_finding_not_a_coercion() -> Non
 
     verdict_ok = _verify(spec, receipt)
     assert TransitionFinding.INPUT_NOT_CANONICALIZABLE not in verdict_ok.findings
+
+
+def test_an_empty_observed_head_is_a_finding_not_a_coercion() -> None:
+    """Held to the same standard as a DECLARED head (`_required`): empty is
+    refused, not treated as a distinct value."""
+    spec = _spec()
+    receipt = _receipt(spec)
+    bad_heads: Any = [*spec.migration.expected_heads, ""]
+    verdict = _verify(spec, receipt, observed_target_heads=bad_heads)
+    assert TransitionFinding.INPUT_NOT_CANONICALIZABLE in verdict.findings
+
+    verdict_ok = _verify(spec, receipt)
+    assert TransitionFinding.INPUT_NOT_CANONICALIZABLE not in verdict_ok.findings
+
+
+def test_a_padded_observed_head_is_a_finding_not_a_coercion() -> None:
+    spec = _spec()
+    receipt = _receipt(spec)
+    bad_heads: Any = [" " + spec.migration.expected_heads[0]]
+    verdict = _verify(spec, receipt, observed_target_heads=bad_heads)
+    assert TransitionFinding.INPUT_NOT_CANONICALIZABLE in verdict.findings
+
+    verdict_ok = _verify(spec, receipt)
+    assert TransitionFinding.INPUT_NOT_CANONICALIZABLE not in verdict_ok.findings
+
+
+def test_declared_vs_spec_still_reports_when_observed_heads_are_malformed() -> None:
+    """A check that does not need `observed_target_heads` at all keeps
+    running instead of an early return suppressing it."""
+    spec = _spec()
+    receipt = _receipt(
+        spec,
+        target_side=TargetSide(
+            descriptor_sha256=_descriptor_digest(spec),
+            migration_heads=(),  # disagrees with spec.migration.expected_heads
+            image_digest=spec.image_digest,
+            image_source_revision=spec.source_revision,
+        ),
+    )
+    bad_heads: Any = None
+    verdict = _verify(spec, receipt, observed_target_heads=bad_heads)
+    assert TransitionFinding.TARGET_HEADS_DECLARED_VS_SPEC in verdict.findings
+    assert TransitionFinding.INPUT_NOT_CANONICALIZABLE in verdict.findings
 
 
 # ── descriptor / image / product findings ───────────────────────────────────
@@ -791,7 +869,7 @@ def test_a_data_export_backup_is_refused() -> None:
     spec = _spec()
     receipt = _receipt(spec)
     record = BackupRecord(
-        dataset="starter-db",
+        dataset="primary",
         path=_BACKUP_PATH,
         size_bytes=1_000_000,
         checksum="deadbeef" * 8,
@@ -811,7 +889,7 @@ def test_backup_assurance_below_verified_is_refused() -> None:
     spec = _spec()
     receipt = _receipt(spec)
     record = BackupRecord(
-        dataset="starter-db",
+        dataset="primary",
         path=_BACKUP_PATH,
         size_bytes=1_000_000,
         checksum="deadbeef" * 8,
@@ -841,7 +919,7 @@ def test_a_bundle_digest_mismatch_is_refused() -> None:
     spec = _spec()
     receipt = _receipt(spec)
     record = BackupRecord(
-        dataset="starter-db",
+        dataset="primary",
         path=_BACKUP_PATH,
         size_bytes=1_000_000,
         checksum="cafebabe" * 8,
@@ -862,7 +940,7 @@ def test_a_checksum_algorithm_only_backup_mismatch_is_refused() -> None:
     spec = _spec()
     receipt = _receipt(spec)
     record = BackupRecord(
-        dataset="starter-db",
+        dataset="primary",
         path=_BACKUP_PATH,
         size_bytes=1_000_000,
         checksum="deadbeef" * 8,
@@ -882,7 +960,7 @@ def test_a_size_mismatch_is_refused() -> None:
     spec = _spec()
     receipt = _receipt(spec)
     record = BackupRecord(
-        dataset="starter-db",
+        dataset="primary",
         path=_BACKUP_PATH,
         size_bytes=999,
         checksum="deadbeef" * 8,
@@ -905,7 +983,7 @@ def test_a_non_int_backup_record_size_is_a_finding_not_a_coercion() -> None:
     receipt = _receipt(spec)
     bad_size: Any = 1_000_000.5
     record = BackupRecord(
-        dataset="starter-db",
+        dataset="primary",
         path=_BACKUP_PATH,
         size_bytes=bad_size,
         checksum="deadbeef" * 8,
@@ -927,7 +1005,7 @@ def test_a_bool_backup_record_size_is_a_finding_not_a_coercion() -> None:
     receipt = _receipt(spec)
     bad_size: Any = True
     record = BackupRecord(
-        dataset="starter-db",
+        dataset="primary",
         path=_BACKUP_PATH,
         size_bytes=bad_size,
         checksum="deadbeef" * 8,
@@ -955,7 +1033,7 @@ def test_an_unsupported_checksum_algorithm_is_refused() -> None:
         ),
     )
     record = BackupRecord(
-        dataset="starter-db",
+        dataset="primary",
         path=_BACKUP_PATH,
         size_bytes=1_000_000,
         checksum="deadbeef" * 8,
@@ -978,7 +1056,7 @@ def test_an_unsupported_checksum_algorithm_is_refused() -> None:
         ),
     )
     sha512_record = BackupRecord(
-        dataset="starter-db",
+        dataset="primary",
         path=_BACKUP_PATH,
         size_bytes=1_000_000,
         checksum="c" * 128,
@@ -989,6 +1067,78 @@ def test_an_unsupported_checksum_algorithm_is_refused() -> None:
     )
     verdict_ok = _verify(spec, sha512_receipt, backup_record=sha512_record)
     assert TransitionFinding.BACKUP_ALGORITHM_UNSUPPORTED not in verdict_ok.findings
+
+
+def test_an_undeclared_dataset_is_refused() -> None:
+    spec = _spec()
+    receipt = _receipt(spec)
+    record = BackupRecord(
+        dataset="not-a-declared-dataset",
+        path=_BACKUP_PATH,
+        size_bytes=1_000_000,
+        checksum="deadbeef" * 8,
+        checksum_algorithm="sha256",
+        completed_at_epoch=1_700_000_000,
+        assurance=Assurance.PROVED,
+        artefact_class=ArtefactClass.RECOVERY_BUNDLE,
+    )
+    verdict = _verify(spec, receipt, backup_record=record)
+    assert TransitionFinding.BACKUP_DATASET_NOT_DECLARED in verdict.findings
+
+    # near miss: "primary" is the real descriptor's declared dataset
+    verdict_ok = _verify(spec, receipt)
+    assert TransitionFinding.BACKUP_DATASET_NOT_DECLARED not in verdict_ok.findings
+
+
+def test_a_declared_dataset_algorithm_mismatch_is_refused() -> None:
+    """Survivor-killer for the global allowlist: sha256 is itself an ALLOWED
+    algorithm, so only a per-dataset comparison catches it disagreeing with
+    what THIS dataset actually declares."""
+    sha512_spec = _sha512_spec()
+    wrong_receipt = _receipt(
+        sha512_spec,
+        backup=TransitionBackup(
+            bundle_digest="deadbeef" * 8,
+            checksum_algorithm="sha256",  # the dataset declares sha512
+            size_bytes=1_000_000,
+            bundle_id=_BACKUP_PATH,
+        ),
+    )
+    wrong_record = BackupRecord(
+        dataset="primary",
+        path=_BACKUP_PATH,
+        size_bytes=1_000_000,
+        checksum="deadbeef" * 8,
+        checksum_algorithm="sha256",
+        completed_at_epoch=1_700_000_000,
+        assurance=Assurance.PROVED,
+        artefact_class=ArtefactClass.RECOVERY_BUNDLE,
+    )
+    verdict = _verify(sha512_spec, wrong_receipt, backup_record=wrong_record)
+    assert TransitionFinding.BACKUP_ALGORITHM_NOT_DECLARED in verdict.findings
+
+    # near miss: sha512, matching what this dataset actually declares
+    matching_receipt = _receipt(
+        sha512_spec,
+        backup=TransitionBackup(
+            bundle_digest="c" * 128,
+            checksum_algorithm="sha512",
+            size_bytes=1_000_000,
+            bundle_id=_BACKUP_PATH,
+        ),
+    )
+    matching_record = BackupRecord(
+        dataset="primary",
+        path=_BACKUP_PATH,
+        size_bytes=1_000_000,
+        checksum="c" * 128,
+        checksum_algorithm="sha512",
+        completed_at_epoch=1_700_000_000,
+        assurance=Assurance.PROVED,
+        artefact_class=ArtefactClass.RECOVERY_BUNDLE,
+    )
+    verdict_ok = _verify(sha512_spec, matching_receipt, backup_record=matching_record)
+    assert TransitionFinding.BACKUP_ALGORITHM_NOT_DECLARED not in verdict_ok.findings
 
 
 def test_an_uppercase_bundle_digest_is_malformed() -> None:
@@ -1006,7 +1156,7 @@ def test_an_uppercase_bundle_digest_is_malformed() -> None:
         ),
     )
     record = BackupRecord(
-        dataset="starter-db",
+        dataset="primary",
         path=_BACKUP_PATH,
         size_bytes=1_000_000,
         checksum="DEADBEEF" * 8,
@@ -1035,7 +1185,7 @@ def test_a_wrong_length_bundle_digest_is_malformed() -> None:
         ),
     )
     record = BackupRecord(
-        dataset="starter-db",
+        dataset="primary",
         path=_BACKUP_PATH,
         size_bytes=1_000_000,
         checksum="deadbeef" * 4,
@@ -1059,7 +1209,7 @@ def test_a_record_built_by_backup_record_from_receipt_is_refused() -> None:
     spec = _spec()
     external_receipt = ExternalRecoveryReceiptV1(
         identity=DatasetIdentityV1(
-            product=spec.product, dataset="starter-db", lineage="lineage-1"
+            product=spec.product, dataset="primary", lineage="lineage-1"
         ),
         descriptor_digest=_descriptor_digest(spec),
         snapshot_checksum="deadbeef" * 8,
@@ -1095,6 +1245,90 @@ def test_a_record_built_by_backup_record_from_receipt_is_refused() -> None:
     # near miss: a real, locally written artefact path
     verdict_ok = _verify(spec, _receipt(spec))
     assert TransitionFinding.BACKUP_RECORD_NOT_ARTEFACT_BOUND not in verdict_ok.findings
+
+
+# ── self-canonicalization / never-raises on BackupRecord shape ─────────────
+
+
+def test_a_directly_constructed_receipt_with_a_secret_shaped_field_is_refused() -> None:
+    """`TransitionReceiptV1.parse` scans for secrets; a receipt built
+    directly via the constructor never does. `bundle_id` is chosen equal to
+    the record's `path` so `BACKUP_ID_MISMATCH` would NOT fire -- only the
+    verifier's own self-canonicalization attempt catches this."""
+    spec = _spec()
+    secret_shaped = "AKIAIOSFODNN7EXAMPLE"
+    receipt = _receipt(
+        spec,
+        backup=TransitionBackup(
+            bundle_digest="deadbeef" * 8,
+            checksum_algorithm="sha256",
+            size_bytes=1_000_000,
+            bundle_id=secret_shaped,
+        ),
+    )
+    record = BackupRecord(
+        dataset="primary",
+        path=secret_shaped,
+        size_bytes=1_000_000,
+        checksum="deadbeef" * 8,
+        checksum_algorithm="sha256",
+        completed_at_epoch=1_700_000_000,
+        assurance=Assurance.PROVED,
+        artefact_class=ArtefactClass.RECOVERY_BUNDLE,
+    )
+    verdict = _verify(spec, receipt, backup_record=record)
+    assert TransitionFinding.BACKUP_ID_MISMATCH not in verdict.findings
+    assert TransitionFinding.INPUT_NOT_CANONICALIZABLE in verdict.findings
+
+    verdict_ok = _verify(spec, _receipt(spec))
+    assert TransitionFinding.INPUT_NOT_CANONICALIZABLE not in verdict_ok.findings
+
+
+def test_a_none_backup_record_path_is_a_finding_not_a_crash() -> None:
+    spec = _spec()
+    receipt = _receipt(spec)
+    bad_path: Any = None
+    record = BackupRecord(
+        dataset="primary",
+        path=bad_path,
+        size_bytes=1_000_000,
+        checksum="deadbeef" * 8,
+        checksum_algorithm="sha256",
+        completed_at_epoch=1_700_000_000,
+        assurance=Assurance.PROVED,
+        artefact_class=ArtefactClass.RECOVERY_BUNDLE,
+    )
+    verdict = _verify(spec, receipt, backup_record=record)
+    assert TransitionFinding.INPUT_NOT_CANONICALIZABLE in verdict.findings
+    assert TransitionFinding.BACKUP_ID_MISMATCH not in verdict.findings
+    assert TransitionFinding.BACKUP_RECORD_NOT_ARTEFACT_BOUND not in verdict.findings
+
+    verdict_ok = _verify(spec, receipt)
+    assert TransitionFinding.INPUT_NOT_CANONICALIZABLE not in verdict_ok.findings
+
+
+def test_a_string_assurance_is_a_finding_not_a_crash() -> None:
+    """`.rank` access on a non-`Assurance` value would raise -- this is the
+    'never raises' guarantee made true for `assurance`."""
+    spec = _spec()
+    receipt = _receipt(spec)
+    bad_assurance: Any = "proved"
+    record = BackupRecord(
+        dataset="primary",
+        path=_BACKUP_PATH,
+        size_bytes=1_000_000,
+        checksum="deadbeef" * 8,
+        checksum_algorithm="sha256",
+        completed_at_epoch=1_700_000_000,
+        assurance=bad_assurance,
+        artefact_class=ArtefactClass.RECOVERY_BUNDLE,
+    )
+    verdict = _verify(spec, receipt, backup_record=record)
+    assert TransitionFinding.INPUT_NOT_CANONICALIZABLE in verdict.findings
+    assert TransitionFinding.BACKUP_ASSURANCE_TOO_LOW not in verdict.findings
+
+    verdict_ok = _verify(spec, receipt)
+    assert TransitionFinding.INPUT_NOT_CANONICALIZABLE not in verdict_ok.findings
 
 
 # ── constructor guards ───────────────────────────────────────────────────────

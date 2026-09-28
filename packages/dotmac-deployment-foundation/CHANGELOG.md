@@ -47,14 +47,30 @@ values — and `backup_record_from_receipt` itself now refuses (`SpecError`) a
 `path` that does not carry the shared `EXTERNAL_BACKUP_PATH_PREFIX`, so its
 one caller (`engine/run.py`) cannot emit a record this detection would miss.
 
+A backup's `dataset` must name a dataset the descriptor's own
+`backup_datasets` actually declares (`BACKUP_DATASET_NOT_DECLARED`), and its
+`checksum_algorithm` must match that specific dataset's declared `checksum`
+— not merely the global allow-list — or `BACKUP_ALGORITHM_NOT_DECLARED`.
+
 Every digest-shaped field (`descriptor_sha256`, `image_digest`,
-`previous_receipt_digest`) and every migration head must already be
-canonical — `sha256:` plus 64 lowercase hex for a digest, no leading/trailing
-whitespace and non-empty for a head — `parse()` refuses rather than
-normalizes a differently-spelled input. Neither the verifier nor the parser
-coerces a malformed input to make it fit: a non-`int` `size_bytes`, a bare
-string or non-string element in `observed_target_heads`, and similar shape
-violations are findings, not silent casts.
+`previous_receipt_digest`) and every migration head — DECLARED and OBSERVED
+alike — must already be canonical: `sha256:` plus 64 lowercase hex for a
+digest, no leading/trailing whitespace and non-empty for a head. `parse()`
+refuses rather than normalizes a differently-spelled input, and the verifier
+also attempts the RECEIPT's own canonicalization (`receipt.canonical_bytes()`)
+so a receipt built directly rather than through `parse()` cannot carry an
+undetected secret-shaped field.
+
+Never raises, made concrete: every `BackupRecord` field the verifier reads
+(`path`, `checksum`, `dataset` as strings; `assurance` as an `Assurance`;
+`artefact_class` as an `ArtefactClass`; `size_bytes` as a non-bool `int`) is
+type-checked before use, and a malformed one is `INPUT_NOT_CANONICALIZABLE`
+rather than an `AttributeError`/`TypeError` — the same rule
+`observed_target_heads` and a receipt/spec that cannot itself be hashed were
+already held to. A check that does not need the malformed field keeps
+running rather than an early return silencing every finding after it: an
+operator sees every way a receipt is wrong in one pass, not one refusal per
+re-run.
 
 ### Gate-3 successor execution authority (candidate; not released)
 
