@@ -178,7 +178,7 @@ from .backup import ArtefactClass, Assurance, BackupRecord
 from .digest import Digest
 from .errors import SpecError
 from .external_recovery import EXTERNAL_BACKUP_PATH_PREFIX
-from .recovery import load_manifest
+from .recovery import BundleComponent, load_manifest
 from .secrets_guard import require_no_secrets
 from .spec import BackupDataset
 
@@ -459,7 +459,18 @@ class TransitionBackup:
     carries leading or trailing whitespace, and is compared to
     ``BackupRecord.checksum`` by exact string equality, unnormalized, alongside
     ``checksum_algorithm`` (see :func:`_check_backup`) — the same comparison
-    this module always made, not a new one.
+    this module always made, not a new one. It is the artefact's OWN checksum,
+    nothing more — Michael's 2026-09-28 correction of an earlier ruling here
+    that bound this field to the bundle manifest's digest, which made a real
+    backup (whose recorded checksum is the write-time artefact checksum, not
+    a manifest digest) unverifiable and a sha512 dataset impossible to express.
+
+    ``manifest_digest`` is the separate field that carries the bundle
+    manifest's own identity: a canonical ``sha256:`` digest, compared against
+    ``RecoveryBundleManifestV1.sha256_digest()`` (see :func:`_check_backup`'s
+    manifest section). The artefact (``bundle_digest``) is linked to that
+    manifest through the manifest's own ``database_dump`` component digest,
+    not by conflating the two digests into one field.
 
     ``bundle_id`` binds this receipt to a *specific* backup artefact.
     :class:`~.backup.BackupRecord` carries no id field of its own, so
@@ -485,6 +496,7 @@ class TransitionBackup:
     checksum_algorithm: str
     size_bytes: int
     bundle_id: str
+    manifest_digest: str
 
     def __post_init__(self) -> None:
         object.__setattr__(
@@ -500,6 +512,11 @@ class TransitionBackup:
         object.__setattr__(
             self, "bundle_id", _required(self.bundle_id, where="backup.bundle_id")
         )
+        object.__setattr__(
+            self,
+            "manifest_digest",
+            _canonical_digest(self.manifest_digest, where="backup.manifest_digest"),
+        )
         size = _int(self.size_bytes, where="backup.size_bytes")
         if size < 0:
             raise SpecError("backup.size_bytes cannot be negative")
@@ -511,12 +528,19 @@ class TransitionBackup:
             "checksum_algorithm": self.checksum_algorithm,
             "size_bytes": self.size_bytes,
             "bundle_id": self.bundle_id,
+            "manifest_digest": self.manifest_digest,
         }
 
     @classmethod
     def from_document(cls, value: object, *, where: str) -> TransitionBackup:
         document = _mapping(value, where=where)
-        known = {"bundle_digest", "checksum_algorithm", "size_bytes", "bundle_id"}
+        known = {
+            "bundle_digest",
+            "checksum_algorithm",
+            "size_bytes",
+            "bundle_id",
+            "manifest_digest",
+        }
         _strict(document, where=where, known=known)
         return cls(
             bundle_digest=_str(
@@ -527,6 +551,9 @@ class TransitionBackup:
             ),
             size_bytes=_int(document["size_bytes"], where=f"{where}.size_bytes"),
             bundle_id=_str(document["bundle_id"], where=f"{where}.bundle_id"),
+            manifest_digest=_str(
+                document["manifest_digest"], where=f"{where}.manifest_digest"
+            ),
         )
 
 
@@ -705,6 +732,8 @@ class TransitionFinding(str, Enum):
     BACKUP_MANIFEST_NOT_A_BUNDLE = "backup_manifest_not_a_bundle"
     BACKUP_MANIFEST_DIGEST_MISMATCH = "backup_manifest_digest_mismatch"
     BACKUP_MANIFEST_SCOPE_MISMATCH = "backup_manifest_scope_mismatch"
+    BACKUP_ARTEFACT_NOT_IN_MANIFEST = "backup_artefact_not_in_manifest"
+    BACKUP_ALGORITHM_NOT_BUNDLE_COMPATIBLE = "backup_algorithm_not_bundle_compatible"
     PRODUCT_MISMATCH = "product_mismatch"
     INPUT_NOT_CANONICALIZABLE = "input_not_canonicalizable"
 
@@ -995,12 +1024,6 @@ def _check_backup(
                 isinstance(head, str) for head in manifest_heads_raw
             ):
                 raise SpecError("manifest migration_heads must be a list of strings")
-            # A bundle's identity IS its manifest digest -- the same value
-            # `recovery.build_recovery_receipt` stores as `bundle_digest`
-            # (manifest.sha256_digest()). That value is always `sha256:`
-            # prefixed (Digest.of's one algorithm); `.hex` strips the prefix
-            # to compare against this receipt's bare-hex `bundle_digest`.
-            manifest_digest_hex = Digest.parse(manifest.sha256_digest()).hex
             manifest_heads = tuple(sorted(set(manifest_heads_raw)))
         except (
             SpecError,
@@ -1011,8 +1034,29 @@ def _check_backup(
         ):
             findings.append(TransitionFinding.BACKUP_MANIFEST_NOT_A_BUNDLE)
         else:
-            if receipt.backup.bundle_digest != manifest_digest_hex:
+            # The manifest's own identity is its canonical digest -- compared
+            # against the receipt's separate `manifest_digest` field, NOT
+            # `bundle_digest` (which stays bound to the artefact's own
+            # write-time checksum, above). See the module docstring's "Why
+            # round 5 was wrong".
+            if receipt.backup.manifest_digest != manifest.sha256_digest():
                 findings.append(TransitionFinding.BACKUP_MANIFEST_DIGEST_MISMATCH)
+            # The artefact is linked to the manifest through the manifest's
+            # own `database_dump` component digest -- the one piece of the
+            # manifest that describes the actual dump bytes `bundle_digest`
+            # is a checksum of. Every manifest component digest this
+            # Foundation can express is `sha256` (`digest.ALGORITHMS` has no
+            # other entry), so the link can only hold when the RECORD's own
+            # checksum is also sha256; a sha512 (or any other) dataset is an
+            # explicit, named refusal rather than an impossible comparison.
+            if backup_record.checksum_algorithm != "sha256":
+                findings.append(
+                    TransitionFinding.BACKUP_ALGORITHM_NOT_BUNDLE_COMPATIBLE
+                )
+            elif checksum_ok:
+                dump_digest = manifest.component_digest(BundleComponent.DATABASE_DUMP)
+                if backup_record.checksum != dump_digest.hex:
+                    findings.append(TransitionFinding.BACKUP_ARTEFACT_NOT_IN_MANIFEST)
             # The backup is of the SOURCE database, before this transition's
             # migration runs -- so it is `receipt.source`, not
             # `receipt.target_side`, that the manifest's own scope must agree
