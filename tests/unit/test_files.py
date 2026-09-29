@@ -23,6 +23,7 @@ from dotmac_files.physical import (
     observe_object,
     open_object,
     prepare_upload,
+    recheck_and_delete_orphan,
 )
 from dotmac_files.providers import ObjectInfo, StorageBoundaryViolation, StorageProvider
 from dotmac_files.service import (
@@ -528,6 +529,119 @@ def test_orphan_reaper_deletes_only_old_unreferenced_keys_in_the_tenant_prefix(
     delete_orphans(provider, scope=scope, keys=orphan_keys)
     assert orphan_keys == (orphan,)
     assert prepared.storage_key in provider.objects
+
+
+def test_reviewed_orphan_recheck_never_deletes_referenced_fresh_or_absent_key() -> None:
+    scope = TenantScope(uuid4())
+    key = f"tenants/{scope.tenant_id}/files/{uuid4()}"
+    provider = MemoryProvider()
+    provider.objects[key] = b"retained"
+    reads: list[str] = []
+
+    def referenced(candidate: str) -> bool:
+        reads.append(candidate)
+        return True
+
+    result = recheck_and_delete_orphan(
+        provider,
+        scope=scope,
+        key=key,
+        expected_provider_code=provider.code,
+        older_than=datetime.max.replace(tzinfo=UTC),
+        is_referenced=referenced,
+    )
+    assert result.outcome == "referenced"
+    assert reads == [key]
+    assert key in provider.objects
+
+    result = recheck_and_delete_orphan(
+        provider,
+        scope=scope,
+        key=key,
+        expected_provider_code=provider.code,
+        older_than=datetime.min.replace(tzinfo=UTC),
+        is_referenced=lambda _: False,
+    )
+    assert result.outcome == "too_new"
+    assert result.observed_last_modified is not None
+    assert key in provider.objects
+
+    provider.objects.clear()
+    result = recheck_and_delete_orphan(
+        provider,
+        scope=scope,
+        key=key,
+        expected_provider_code=provider.code,
+        older_than=datetime.max.replace(tzinfo=UTC),
+        is_referenced=lambda _: False,
+    )
+    assert result.outcome == "absent"
+
+
+def test_reviewed_orphan_recheck_deletes_only_exact_old_key_after_reference_read() -> (
+    None
+):
+    scope = TenantScope(uuid4())
+    key = f"tenants/{scope.tenant_id}/files/{uuid4()}"
+    lookalike = f"{key}-still-referenced"
+    provider = MemoryProvider()
+    provider.objects[key] = b"orphan"
+    provider.objects[lookalike] = b"keep"
+    events: list[str] = []
+
+    def reference_read(candidate: str) -> bool:
+        assert candidate == key
+        events.append("reference-read-finished")
+        return False
+
+    original_delete = provider.delete
+
+    def delete(candidate: str) -> None:
+        assert events == ["reference-read-finished"]
+        original_delete(candidate)
+
+    provider.delete = delete  # type: ignore[method-assign]
+    result = recheck_and_delete_orphan(
+        provider,
+        scope=scope,
+        key=key,
+        expected_provider_code=provider.code,
+        older_than=datetime.max.replace(tzinfo=UTC),
+        is_referenced=reference_read,
+    )
+    assert result.outcome == "deleted"
+    assert result.observed_last_modified is not None
+    assert key not in provider.objects
+    assert lookalike in provider.objects
+
+
+def test_reviewed_orphan_recheck_refuses_wrong_provider_or_scope() -> None:
+    from dotmac_files import ProviderMismatch
+
+    scope = TenantScope(uuid4())
+    provider = MemoryProvider()
+    key = f"tenants/{scope.tenant_id}/files/{uuid4()}"
+    provider.objects[key] = b"retain"
+
+    with pytest.raises(ProviderMismatch):
+        recheck_and_delete_orphan(
+            provider,
+            scope=scope,
+            key=key,
+            expected_provider_code="other",
+            older_than=datetime.max.replace(tzinfo=UTC),
+            is_referenced=lambda _: False,
+        )
+    with pytest.raises(StorageBoundaryViolation):
+        recheck_and_delete_orphan(
+            provider,
+            scope=scope,
+            key=f"tenants/{uuid4()}/files/{uuid4()}",
+            expected_provider_code=provider.code,
+            older_than=datetime.max.replace(tzinfo=UTC),
+            is_referenced=lambda _: False,
+        )
+    assert key in provider.objects
 
 
 def test_orphan_reaper_fails_closed_on_a_provider_key_outside_the_tenant_prefix(

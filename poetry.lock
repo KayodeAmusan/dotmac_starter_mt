@@ -1094,7 +1094,7 @@ url = "packages/dotmac-fiber-plant"
 
 [[package]]
 name = "dotmac-files"
-version = "0.1.0a4"
+version = "0.1.0a5"
 description = "DotMac dual-plane stored-object lifecycle and validation"
 optional = false
 python-versions = ">=3.11,<3.14"

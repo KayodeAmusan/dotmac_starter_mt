@@ -72,3 +72,24 @@ split, so a provider stream or network call never holds a database transaction.
 The module never commits or rolls back. A consuming assembly composes its own
 `fi` Alembic lineage through the public `dotmac_files.versions_dir()` locator;
 it never hard-codes a source-checkout path.
+
+## Reviewed orphan deletion
+
+`recheck_and_delete_orphan` accepts one key from a product-authorized plan. The
+product must first commit the run and raw key to a durable repair record. The
+operation checks that the live provider still matches the plan, calls the
+product's short-lived reference reader across provider codes and lifecycle
+states, observes the exact object key, and deletes only when the object's own
+`last_modified` precedes the reviewed age cutoff. It returns a typed outcome
+for the product to record. The product owns plan review, retention policy,
+authorization, outcome commits and retry rules; the callback must close its
+database transaction before returning. A failed provider call is propagated
+so the product can record failure and stop its run.
+
+The database reference read and object-store delete cannot be atomic. Before
+an application adopts this operation, it must enforce that no writer can add
+a reference to the reviewed key after the recheck, or hold a product-owned
+reservation that its reference writers honor. Immutable object keys must also
+prevent replacement between the exact-key observation and delete. Until those
+invariants are proved, the operation is a source candidate, not a safe
+production cutover.

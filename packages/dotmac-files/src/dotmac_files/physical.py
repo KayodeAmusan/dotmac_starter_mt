@@ -13,9 +13,11 @@ import hashlib
 import re
 import tempfile
 import zipfile
-from collections.abc import Iterable
+from collections.abc import Callable, Iterable
+from dataclasses import dataclass
+from datetime import datetime
 from pathlib import PurePath
-from typing import IO
+from typing import IO, Literal
 from uuid import uuid4
 
 from dotmac_kernel.cache import PlatformScope, Scope, TenantScope
@@ -253,6 +255,75 @@ def delete_orphans(
         provider.delete(key)
 
 
+@dataclass(frozen=True)
+class OrphanRecheckResult:
+    """One reviewed key's physical outcome; the caller records it durably."""
+
+    outcome: Literal["referenced", "absent", "too_new", "deleted"]
+    observed_last_modified: datetime | None = None
+
+
+def recheck_and_delete_orphan(
+    provider: StorageProvider,
+    *,
+    scope: Scope,
+    key: str,
+    expected_provider_code: str,
+    older_than: datetime,
+    is_referenced: Callable[[str], bool],
+) -> OrphanRecheckResult:
+    """Recheck one previously authorized orphan and delete it if still eligible.
+
+    The product owns the reviewed plan, its durable pre-delete record, and
+    outcome recording. ``is_referenced`` must finish its short database read
+    and close that transaction before returning; no provider I/O occurs while
+    that read is in progress. References must be checked across provider codes
+    and lifecycle states in the product's authoritative file relation.
+
+    This deliberately accepts one key, so a failed delete cannot hide which
+    candidate failed. It does not retry or make the database/object-store race
+    atomic; the product must stop on an exception and retain its repair record.
+    """
+    validate_provider_code(provider.code)
+    validate_provider_code(expected_provider_code)
+    if provider.code != expected_provider_code:
+        raise ProviderMismatch("live provider does not match reviewed provider")
+    if not key.startswith(scope_prefix(scope)):
+        raise StorageBoundaryViolation(
+            "refusing to delete an object outside the requested scope prefix"
+        )
+    if older_than.tzinfo is None or older_than.utcoffset() is None:
+        raise ValueError("older_than must be timezone-aware")
+
+    if is_referenced(key):
+        return OrphanRecheckResult("referenced")
+
+    # Prefix listing can include lookalikes; only an exact key is eligible.
+    observed: ObjectInfo | None = None
+    for info in provider.list(key):
+        if not info.key.startswith(scope_prefix(scope)):
+            raise StorageBoundaryViolation(
+                "provider returned an object outside the requested scope prefix"
+            )
+        if info.key != key:
+            continue
+        if observed is not None:
+            raise StorageBoundaryViolation("provider returned a duplicate object key")
+        observed = info
+    if observed is None:
+        return OrphanRecheckResult("absent")
+    if (
+        observed.last_modified.tzinfo is None
+        or observed.last_modified.utcoffset() is None
+    ):
+        raise ValueError("object last_modified must be timezone-aware")
+    if not observed.last_modified < older_than:
+        return OrphanRecheckResult("too_new", observed.last_modified)
+
+    provider.delete(key)
+    return OrphanRecheckResult("deleted", observed.last_modified)
+
+
 def _require_provider(target: StoredObjectRef, provider: StorageProvider) -> None:
     validate_provider_code(provider.code)
     if target.provider_code != provider.code:
@@ -262,10 +333,12 @@ def _require_provider(target: StoredObjectRef, provider: StorageProvider) -> Non
 
 
 __all__ = [
+    "OrphanRecheckResult",
     "delete_object",
     "delete_orphans",
     "list_objects",
     "observe_object",
     "open_object",
     "prepare_upload",
+    "recheck_and_delete_orphan",
 ]

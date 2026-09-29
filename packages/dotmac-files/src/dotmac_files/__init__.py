@@ -17,12 +17,14 @@ from dotmac_files.manifest import module
 from dotmac_files.migrations import versions_dir
 from dotmac_files.models import PlatformStoredFile, TenantStoredFile
 from dotmac_files.physical import (
+    OrphanRecheckResult,
     delete_object,
     delete_orphans,
     list_objects,
     observe_object,
     open_object,
     prepare_upload,
+    recheck_and_delete_orphan,
 )
 from dotmac_files.providers import (
     ObjectInfo,
@@ -46,7 +48,7 @@ from dotmac_files.service import (
     stage_file,
 )
 
-__version__ = "0.1.0a4"
+__version__ = "0.1.0a5"
 
 __all__ = [
     "FileError",
@@ -55,20 +57,21 @@ __all__ = [
     "InvalidFileState",
     "ObjectInfo",
     "ObjectMissing",
+    "OrphanRecheckResult",
+    "PlatformStoredFile",
     "PreparedFile",
     "PreparedFileConflict",
     "ProviderMismatch",
     "ReadableObject",
-    "StorageConflict",
+    "StaleObjectRef",
     "StorageBoundaryViolation",
+    "StorageConflict",
     "StorageError",
     "StorageProvider",
     "StorageUnavailable",
-    "StaleObjectRef",
-    "PlatformStoredFile",
-    "TenantStoredFile",
     "StoredFileNotFound",
     "StoredObjectRef",
+    "TenantStoredFile",
     "UnsafeFile",
     "__version__",
     "delete_object",
@@ -83,6 +86,7 @@ __all__ = [
     "observe_object",
     "open_object",
     "prepare_upload",
+    "recheck_and_delete_orphan",
     "reconciliation_target",
     "record_presence",
     "request_deletion",
