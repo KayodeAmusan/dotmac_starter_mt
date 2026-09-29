@@ -64,6 +64,7 @@ from .authorization_v3 import (
 from .backup import (
     ArtefactClass,
     Assurance,
+    BackupEvidenceOrigin,
     BackupHealth,
     BackupRecord,
     assess,
@@ -219,6 +220,7 @@ from .exposure import (
     verify_exposure,
 )
 from .external_recovery import (
+    EXTERNAL_BACKUP_PATH_PREFIX,
     EXTERNAL_RECEIPT_SCHEMA,
     VERIFICATION_EVIDENCE,
     ExternalRecoveryReceiptV1,
@@ -415,6 +417,17 @@ from .transition import (
     recover_database_promotion,
     require_database_precondition,
 )
+from .transition_receipt import (
+    TRANSITION_RECEIPT_SCHEMA,
+    TargetSide,
+    TransitionBackup,
+    TransitionFinding,
+    TransitionOutcome,
+    TransitionReceiptV1,
+    TransitionSide,
+    TransitionVerdict,
+    verify_transition_receipt,
+)
 from .trusted_host_source import (
     ATTESTATION_SCHEMA,
     CANDIDATE_ATTESTATION_PURPOSE,
@@ -449,6 +462,7 @@ __all__ = [
     "Annotation",
     "ArtefactClass",
     "Assurance",
+    "BackupEvidenceOrigin",
     "AuditReport",
     "AUTHORIZATION_RECEIPT_V2_SCHEMA",
     "AuthorizationReceipt",
@@ -519,6 +533,7 @@ __all__ = [
     "EXECUTION_PLAN_SCHEMA",
     "EXECUTOR_KINDS",
     "EXPOSURES",
+    "EXTERNAL_BACKUP_PATH_PREFIX",
     "EXTERNAL_RECEIPT_SCHEMA",
     "EdgeEndpoint",
     "EffectivePrivilegeAuditUniverse",
@@ -681,7 +696,15 @@ __all__ = [
     "Strategy",
     "StructureFactDimension",
     "StructureFactDirection",
+    "TRANSITION_RECEIPT_SCHEMA",
     "TUNNEL_KINDS",
+    "TargetSide",
+    "TransitionBackup",
+    "TransitionFinding",
+    "TransitionOutcome",
+    "TransitionReceiptV1",
+    "TransitionSide",
+    "TransitionVerdict",
     "TrustPolicy",
     "UnknownFieldError",
     "UnknownSchemaError",
@@ -757,6 +780,7 @@ __all__ = [
     "require_rehearsed_artifact",
     "verify_publication",
     "verify_recovery",
+    "verify_transition_receipt",
     "write_lease",
     "CandidateReceipt",
     "HostSource",

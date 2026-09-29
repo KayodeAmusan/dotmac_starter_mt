@@ -84,6 +84,7 @@ from ..exposure import (
     verify_exposure,
 )
 from ..external_recovery import (
+    EXTERNAL_BACKUP_PATH_PREFIX,
     accept_external_recovery_receipt,
     backup_record_from_receipt,
     require_restore_proof,
@@ -1580,7 +1581,7 @@ class Executor:
             *self._recovery_records.get(step.target, ()),
             backup_record_from_receipt(
                 receipt,
-                path=f"external:{receipt.executor.identifier}",
+                path=f"{EXTERNAL_BACKUP_PATH_PREFIX}{receipt.executor.identifier}",
                 size_bytes=max(1, receipt.restore_duration_seconds),
             ),
         ]

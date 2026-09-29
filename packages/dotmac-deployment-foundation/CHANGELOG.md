@@ -2,6 +2,124 @@
 
 ## Unreleased — successor not allocated
 
+### Corrected: backup evidence origin for transition receipts
+
+`BackupRecord.evidence_origin` is a closed caller attestation with an
+`UNSPECIFIED` default for legacy records. External receipt conversion marks
+`EXTERNAL_RECEIPT`; transition verification requires `LOCAL_ARTEFACT`, even
+when an external record is rewrapped with an ordinary path. The `external:`
+path convention remains an additional refusal. This pure verifier does not
+authenticate local bytes: Control's future producer must independently read
+and hash the local bundle and bind its manifest and database dump before
+calling it. The receipt still makes no restore claim.
+
+### Added: `transition_receipt` — the Foundation's half of D16's two-sided recovery receipt
+
+New module, `DeploymentTransitionReceipt.v1`: a closed schema
+(`TransitionReceiptV1`, `TransitionSide`, `TargetSide`, `TransitionBackup`)
+and a pure verifier, `verify_transition_receipt`, for the receipt that binds
+a source-to-target deployment hop — descriptor, migration heads, the image
+running on the target, the backup taken of the source before migration, and
+the run that performed it. The receipt claims no restore. `dotmac-deployment-control` produces the receipt in a later
+change; this package verifies it independently.
+
+`verify_transition_receipt(receipt, *, spec, observed_target_heads,
+previous_receipt, backup_record, bundle_manifest, observed_image_digest,
+expected_run_id, expected_target, genesis_source=None)` never raises: every
+disagreement becomes one of the closed `TransitionFinding` codes rather than an
+exception, including `INPUT_NOT_CANONICALIZABLE` for an input that cannot
+itself be canonicalized. `genesis_source` and `previous_receipt` are
+mutually exclusive and one is required (`CHAIN_ANCHOR_AMBIGUOUS` otherwise),
+anchoring a chain's first receipt to a caller-named source instead of
+trusting the receipt's own claim. A chain is scoped to one product,
+environment and target (`CHAIN_SCOPE_MISMATCH`); the run that produced a
+receipt must match what the caller actually launched and must not repeat a
+predecessor's run id (`RUN_ID_MISMATCH`/`RUN_ID_REUSED`).
+
+The target image must match the descriptor (`IMAGE_DESCRIPTOR_MISMATCH`),
+the caller's own observation (`IMAGE_DIGEST_MISMATCH`), and the caller's
+observation must itself already be canonical (`OBSERVED_IMAGE_MALFORMED` for
+a bare-hex, uppercase or padded spelling — never normalized). The image's
+source revision must be well-formed 40-lowercase-hex (`IMAGE_REVISION_INVALID`)
+AND match the descriptor's own `source_revision` (`IMAGE_REVISION_DESCRIPTOR_MISMATCH`)
+— a receipt is not evidence about which commit is running unless both hold.
+
+A backup must be a `RECOVERY_BUNDLE` at assurance `VERIFIED` or higher
+(`BACKUP_ASSURANCE_TOO_LOW`). Completeness — that the artefact is a whole
+recovery bundle, not merely intact bytes — is established separately, by
+BINDING the receipt to the bundle's own manifest: the verifier calls
+`recovery.load_manifest(bundle_manifest)` (a new required keyword; pure, no
+I/O — `SpecError` becomes `BACKUP_MANIFEST_NOT_A_BUNDLE`).
+
+**Michael's 2026-09-28 correction of an earlier ruling here:** `bundle_digest`
+stays exactly what it always was — the artefact's own write-time checksum,
+bound to `BackupRecord.checksum` (`BACKUP_DIGEST_MISMATCH`) — and is NOT
+compared with the manifest's identity. The prior ruling bound `bundle_digest`
+to the manifest digest, which made a real backup (whose recorded checksum is
+the artefact checksum, never a manifest digest) unverifiable. A `sha512`
+dataset still cannot verify a bundle-backed receipt: the manifest's component
+digests are `sha256`-only, so such a record is refused by name
+(`BACKUP_ALGORITHM_NOT_BUNDLE_COMPATIBLE`). A new field, `TransitionBackup.manifest_digest` — a canonical
+`sha256:` digest, validated like every other canonical digest on this
+receipt, and now REQUIRED by `parse` — carries the manifest's own identity,
+compared against `RecoveryBundleManifestV1.sha256_digest()`
+(`BACKUP_MANIFEST_DIGEST_MISMATCH`). The artefact is linked to that manifest
+through the manifest's own `database_dump` component digest:
+`BackupRecord.checksum` must equal
+`manifest.component_digest(BundleComponent.DATABASE_DUMP).hex`
+(`BACKUP_ARTEFACT_NOT_IN_MANIFEST`). For a RECOVERY_BUNDLE, the record's
+`path` and `checksum` therefore name the `database_dump` archive file. No
+producer in this package writes such a record yet. Every component digest this Foundation
+can express is `sha256` (`digest.ALGORITHMS` has exactly one entry), so that
+link can only hold when the record's own `checksum_algorithm` is `sha256`; a
+`sha512` (or any other) dataset is refused outright and by name
+(`BACKUP_ALGORITHM_NOT_BUNDLE_COMPATIBLE`) rather than compared and silently
+never matching. The manifest's `product` and sorted, de-duplicated
+`migration_heads` must still agree with `receipt.product` and
+`receipt.source.migration_heads` (the backup is of the SOURCE database,
+before migration — `BACKUP_MANIFEST_SCOPE_MISMATCH`). `VERIFIED` is then
+exactly the remaining claim that level is for: the bytes are intact. A
+disposable restore (`RESTORABLE` and above) is a separate, stronger proof
+this receipt does not claim, and this receipt makes no restore-rehearsal
+claim at all.
+A backup's `bundle_id` binds to `BackupRecord.path` (`BACKUP_ID_MISMATCH`);
+its `checksum_algorithm` is restricted to `BackupDataset.CHECKSUMS`
+(`{sha256, sha512}`, imported directly from `spec.py` — `BACKUP_ALGORITHM_UNSUPPORTED`
+for anything else) and its `bundle_digest` must be lowercase hex of the
+length that algorithm implies, 64 or 128 (`BACKUP_DIGEST_MALFORMED`) — bare
+hex, unprefixed, matching the spelling every existing producer already uses.
+A record shaped like one built by `external_recovery
+.backup_record_from_receipt` (an executor identifier and a restore duration
+standing in for a real artefact id and byte count) is refused outright
+(`BACKUP_RECORD_NOT_ARTEFACT_BOUND`) rather than accepted on those stand-in
+values. The refusal uses the explicit evidence origin; the path prefix is an
+additional guard against a mislabelled record.
+
+A backup's `dataset` must name a dataset the descriptor's own
+`backup_datasets` actually declares (`BACKUP_DATASET_NOT_DECLARED`), and its
+`checksum_algorithm` must match that specific dataset's declared `checksum`
+— not merely the global allow-list — or `BACKUP_ALGORITHM_NOT_DECLARED`.
+
+Every digest-shaped field (`descriptor_sha256`, `image_digest`,
+`previous_receipt_digest`, `manifest_digest`) and every migration head — DECLARED and OBSERVED
+alike — must already be canonical: `sha256:` plus 64 lowercase hex for a
+digest, no leading/trailing whitespace and non-empty for a head. `parse()`
+refuses rather than normalizes a differently-spelled input, and the verifier
+also attempts the RECEIPT's own canonicalization (`receipt.canonical_bytes()`)
+so a receipt built directly rather than through `parse()` cannot carry an
+undetected secret-shaped field.
+
+Never raises, made concrete: every `BackupRecord` field the verifier reads
+(`path`, `checksum`, `dataset` as strings; `assurance` as an `Assurance`;
+`artefact_class` as an `ArtefactClass`; `size_bytes` as a non-bool `int`) is
+type-checked before use, and a malformed one is `INPUT_NOT_CANONICALIZABLE`
+rather than an `AttributeError`/`TypeError` — the same rule
+`observed_target_heads` and a receipt/spec that cannot itself be hashed were
+already held to. A check that does not need the malformed field keeps
+running rather than an early return silencing every finding after it: an
+operator sees every way a receipt is wrong in one pass, not one refusal per
+re-run.
+
 ### Gate-3 successor execution authority (candidate; not released)
 
 `FoundationExecutionPlanV3` binds the candidate wheel, exact target,

@@ -32,12 +32,14 @@ import pytest
 from dotmac_deployment_foundation.backup import (
     ArtefactClass,
     Assurance,
+    BackupEvidenceOrigin,
     BackupRecord,
     assess,
 )
 from dotmac_deployment_foundation.engine.plan import Phase, StepKind, build_plan
 from dotmac_deployment_foundation.errors import PreconditionFailed, SpecError
 from dotmac_deployment_foundation.external_recovery import (
+    EXTERNAL_BACKUP_PATH_PREFIX,
     VERIFICATION_EVIDENCE,
     accept_external_recovery_receipt,
     backup_record_from_receipt,
@@ -613,7 +615,29 @@ def test_an_accepted_receipt_writes_the_timestamp_nothing_wrote(
     record = backup_record_from_receipt(receipt, path="external:x", size_bytes=1)
     assert record.assurance is Assurance.PROVED
     assert record.artefact_class is ArtefactClass.RECOVERY_BUNDLE
+    assert record.evidence_origin is BackupEvidenceOrigin.EXTERNAL_RECEIPT
     assert record.restore_proved_at_epoch == receipt.proved_at_epoch
+
+
+def test_a_non_prefixed_path_is_refused(
+    external_spec: ProductDeploymentSpec, dataset: BackupDataset
+) -> None:
+    """The factory preserves the external: path defense in depth.
+
+    Transition verification primarily identifies external records by their
+    explicit evidence origin, rather than relying on this path spelling.
+    """
+    receipt = _accept(
+        external_spec, dataset, _envelope(_document(external_spec, dataset))
+    )
+    with pytest.raises(SpecError, match="must start with"):
+        backup_record_from_receipt(receipt, path="not-external", size_bytes=1)
+
+    # near miss: the conforming prefix is accepted
+    record = backup_record_from_receipt(
+        receipt, path=f"{EXTERNAL_BACKUP_PATH_PREFIX}x", size_bytes=1
+    )
+    assert record.path == f"{EXTERNAL_BACKUP_PATH_PREFIX}x"
 
 
 def test_the_restore_proof_window_now_refuses(

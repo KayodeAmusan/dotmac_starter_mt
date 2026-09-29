@@ -79,7 +79,14 @@ import json
 from collections.abc import Sequence
 from typing import Any, Final
 
-from .backup import SECONDS_PER_DAY, ArtefactClass, Assurance, BackupRecord, assess
+from .backup import (
+    SECONDS_PER_DAY,
+    ArtefactClass,
+    Assurance,
+    BackupEvidenceOrigin,
+    BackupRecord,
+    assess,
+)
 from .digest import Digest
 from .errors import PreconditionFailed, SpecError
 from .evidence import SignatureVerifier
@@ -93,6 +100,18 @@ from .recovery_identity import (
 from .spec import BackupDataset, ProductDeploymentSpec
 
 EXTERNAL_RECEIPT_SCHEMA: Final = "RecoveryReceipt.v1"
+
+#: The `BackupRecord.path` prefix every record built from an external
+#: recovery receipt carries (`engine/run.py`'s
+#: ``path=f"{EXTERNAL_BACKUP_PATH_PREFIX}{receipt.executor.identifier}"``).
+#: `backup_record_from_receipt` REFUSES a `path` that does not start with
+#: this prefix (`SpecError`) — it is the only producer of such a record, so
+#: that refusal is what makes the prefix load-bearing rather than a
+#: convention a caller could quietly violate. This is the ONE place both
+#: this module and any reader of a `BackupRecord` (see `transition_receipt
+#: .py`'s use of this constant to detect such a record) agree on what
+#: "external" looks like.
+EXTERNAL_BACKUP_PATH_PREFIX: Final = "external:"
 
 #: Stands in for the key id a signed document deliberately does not carry.
 #: Machine-shaped so `ExternalExecutorV1` accepts it, and obviously not a
@@ -124,6 +143,7 @@ VERIFICATION_EVIDENCE: Final[dict[str, str]] = {
 
 __all__ = [
     "EXECUTOR_KINDS",
+    "EXTERNAL_BACKUP_PATH_PREFIX",
     "EXTERNAL_RECEIPT_SCHEMA",
     "PRIVILEGE_VERIFICATIONS",
     "VERIFICATION_EVIDENCE",
@@ -407,7 +427,17 @@ def backup_record_from_receipt(
     RESTORABLE or PROVED — and an accepted receipt has already established the
     thing that refusal is protecting: a restore actually happened, into an
     isolated target, and the privilege surface was checked.
+
+    ``path`` keeps the external prefix convention for defence in depth. The
+    explicit ``evidence_origin`` is the source classification consumed by the
+    transition verifier; a path string alone cannot establish provenance.
     """
+    if not path.startswith(EXTERNAL_BACKUP_PATH_PREFIX):
+        raise SpecError(
+            f"backup_record_from_receipt: path {path!r} must start with "
+            f"{EXTERNAL_BACKUP_PATH_PREFIX!r} — this is the one producer of a "
+            "BackupRecord from an external receipt"
+        )
     return BackupRecord(
         dataset=receipt.identity.dataset,
         path=path,
@@ -418,6 +448,7 @@ def backup_record_from_receipt(
         assurance=Assurance.PROVED,
         restore_proved_at_epoch=receipt.proved_at_epoch,
         artefact_class=ArtefactClass.RECOVERY_BUNDLE,
+        evidence_origin=BackupEvidenceOrigin.EXTERNAL_RECEIPT,
         note=(
             f"externally proved by {receipt.executor.kind}:"
             f"{receipt.executor.identifier}@{receipt.executor.version} in "
