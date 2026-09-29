@@ -79,7 +79,14 @@ import json
 from collections.abc import Sequence
 from typing import Any, Final
 
-from .backup import SECONDS_PER_DAY, ArtefactClass, Assurance, BackupRecord, assess
+from .backup import (
+    SECONDS_PER_DAY,
+    ArtefactClass,
+    Assurance,
+    BackupEvidenceOrigin,
+    BackupRecord,
+    assess,
+)
 from .digest import Digest
 from .errors import PreconditionFailed, SpecError
 from .evidence import SignatureVerifier
@@ -421,20 +428,15 @@ def backup_record_from_receipt(
     thing that refusal is protecting: a restore actually happened, into an
     isolated target, and the privilege surface was checked.
 
-    ``path`` must start with :data:`EXTERNAL_BACKUP_PATH_PREFIX`. This is the
-    ONLY producer of a `BackupRecord` from an external receipt, so refusing a
-    non-prefixed path here is what makes the prefix load-bearing rather than
-    a convention a caller could quietly violate: `transition_receipt.py`
-    detects "this record came from an external receipt, not a real artefact"
-    entirely by checking for that prefix, and a producer free to omit it
-    would make that detection unreliable.
+    ``path`` keeps the external prefix convention for defence in depth. The
+    explicit ``evidence_origin`` is the source classification consumed by the
+    transition verifier; a path string alone cannot establish provenance.
     """
     if not path.startswith(EXTERNAL_BACKUP_PATH_PREFIX):
         raise SpecError(
             f"backup_record_from_receipt: path {path!r} must start with "
             f"{EXTERNAL_BACKUP_PATH_PREFIX!r} — this is the one producer of a "
-            "BackupRecord from an external receipt, and a reader elsewhere "
-            "identifies such a record by that prefix alone"
+            "BackupRecord from an external receipt"
         )
     return BackupRecord(
         dataset=receipt.identity.dataset,
@@ -446,6 +448,7 @@ def backup_record_from_receipt(
         assurance=Assurance.PROVED,
         restore_proved_at_epoch=receipt.proved_at_epoch,
         artefact_class=ArtefactClass.RECOVERY_BUNDLE,
+        evidence_origin=BackupEvidenceOrigin.EXTERNAL_RECEIPT,
         note=(
             f"externally proved by {receipt.executor.kind}:"
             f"{receipt.executor.identifier}@{receipt.executor.version} in "

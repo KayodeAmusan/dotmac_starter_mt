@@ -71,6 +71,7 @@ __all__ = [
     "SECONDS_PER_DAY",
     "ArtefactClass",
     "Assurance",
+    "BackupEvidenceOrigin",
     "BackupHealth",
     "BackupRecord",
     "RestoreRehearsal",
@@ -130,6 +131,18 @@ _RANK: Final[dict[Assurance, int]] = {
 }
 
 
+class BackupEvidenceOrigin(str, Enum):
+    """Caller-attested origin of a record's backup evidence.
+
+    An unspecified legacy record cannot establish a local artefact. LOCAL_ARTEFACT
+    remains a caller assertion; this value does not authenticate bytes on disk.
+    """
+
+    UNSPECIFIED = "unspecified"
+    LOCAL_ARTEFACT = "local_artefact"
+    EXTERNAL_RECEIPT = "external_receipt"
+
+
 @dataclass(frozen=True, slots=True)
 class BackupRecord:
     """What is known about one backup artefact.
@@ -149,6 +162,7 @@ class BackupRecord:
     restore_proved_at_epoch: int | None = None
     note: str = ""
     artefact_class: ArtefactClass = ArtefactClass.DATA_EXPORT
+    evidence_origin: BackupEvidenceOrigin = BackupEvidenceOrigin.UNSPECIFIED
 
     def __post_init__(self) -> None:
         """A data export cannot be restorable, and saying so is the point.

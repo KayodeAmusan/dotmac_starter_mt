@@ -176,7 +176,7 @@ from collections.abc import Mapping, Sequence
 from enum import Enum
 from typing import Any, Final
 
-from .backup import ArtefactClass, Assurance, BackupRecord
+from .backup import ArtefactClass, Assurance, BackupEvidenceOrigin, BackupRecord
 from .digest import Digest
 from .errors import SpecError
 from .external_recovery import EXTERNAL_BACKUP_PATH_PREFIX
@@ -487,16 +487,18 @@ class TransitionBackup:
     :class:`~.backup.BackupRecord` carries no id field of its own, so
     ``bundle_id`` is defined to be exactly the recorded artefact
     ``BackupRecord.path`` — the one field that already uniquely names which
-    backup a record describes, PROVIDED that path locates a real, locally
-    written artefact. A record built by
+    backup a record describes, PROVIDED the caller has attested that it is a
+    local artefact. The path is an identifier, not proof of provenance. A
+    record built by
     :func:`~.external_recovery.backup_record_from_receipt` does not: its one
     caller (`engine/run.py`) writes
     ``path=f"{EXTERNAL_BACKUP_PATH_PREFIX}{executor identifier}"`` — enforced
-    by :func:`~.external_recovery.backup_record_from_receipt` itself, which
-    refuses any other spelling — and ``size_bytes=max(1,
+    by :func:`~.external_recovery.backup_record_from_receipt` itself as an
+    additional guard — and ``size_bytes=max(1,
     restore_duration_seconds)``: a stand-in identifying WHICH EXECUTOR ran,
     and a byte count that is actually a duration in seconds, not a real
-    artefact id and size. This module refuses such a record
+    artefact id and size. This module requires an explicit
+    ``LOCAL_ARTEFACT`` evidence origin and refuses such a record
     (``BACKUP_RECORD_NOT_ARTEFACT_BOUND``) rather than let
     ``bundle_id``/``size_bytes`` agreement on those stand-in values be read
     as agreement on the backup itself. Verifying a transition whose backup
@@ -952,9 +954,17 @@ def _check_backup(
     path_ok = isinstance(backup_record.path, str)
     assurance_ok = isinstance(backup_record.assurance, Assurance)
     artefact_class_ok = isinstance(backup_record.artefact_class, ArtefactClass)
+    origin_ok = isinstance(backup_record.evidence_origin, BackupEvidenceOrigin)
     checksum_ok = isinstance(backup_record.checksum, str)
     dataset_ok = isinstance(backup_record.dataset, str)
-    for ok in (path_ok, assurance_ok, artefact_class_ok, checksum_ok, dataset_ok):
+    for ok in (
+        path_ok,
+        assurance_ok,
+        artefact_class_ok,
+        origin_ok,
+        checksum_ok,
+        dataset_ok,
+    ):
         if not ok:
             findings.append(TransitionFinding.INPUT_NOT_CANONICALIZABLE)
 
@@ -1001,7 +1011,12 @@ def _check_backup(
             or declared.checksum != backup_record.checksum_algorithm
         ):
             findings.append(TransitionFinding.BACKUP_ALGORITHM_NOT_DECLARED)
-    if path_ok and backup_record.path.startswith(EXTERNAL_BACKUP_PATH_PREFIX):
+    # This is caller-attested provenance, not independent authentication of
+    # local bytes. Control's future producer must read and hash the local
+    # bundle, bind its manifest and database dump, then call this pure verifier.
+    if backup_record.evidence_origin is not BackupEvidenceOrigin.LOCAL_ARTEFACT or (
+        path_ok and backup_record.path.startswith(EXTERNAL_BACKUP_PATH_PREFIX)
+    ):
         findings.append(TransitionFinding.BACKUP_RECORD_NOT_ARTEFACT_BOUND)
 
     # The classification above (RECOVERY_BUNDLE) is a label on the RECORD; it
@@ -1125,7 +1140,10 @@ def verify_transition_receipt(
     the prior link in the chain, ``genesis_source`` is where the chain
     actually starts (exactly one of the two is given — see the module
     docstring's "Genesis is anchored, never inferred"), ``backup_record`` is
-    the caller's own evidence about the backup taken of the source,
+    the caller's own evidence about the backup taken of the source. Its
+    ``LOCAL_ARTEFACT`` origin is an attestation, not independent authentication:
+    Control's future producer must read and hash local bundle bytes and bind
+    the manifest and database dump before calling this pure verifier.
     ``bundle_manifest`` is that backup's own recovery-bundle manifest
     document (see :func:`recovery.load_manifest`) — the caller's classification
     of the record as a ``RECOVERY_BUNDLE`` is a label; this is what backs it,

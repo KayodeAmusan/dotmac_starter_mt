@@ -2,6 +2,17 @@
 
 ## Unreleased — successor not allocated
 
+### Corrected: backup evidence origin for transition receipts
+
+`BackupRecord.evidence_origin` is a closed caller attestation with an
+`UNSPECIFIED` default for legacy records. External receipt conversion marks
+`EXTERNAL_RECEIPT`; transition verification requires `LOCAL_ARTEFACT`, even
+when an external record is rewrapped with an ordinary path. The `external:`
+path convention remains an additional refusal. This pure verifier does not
+authenticate local bytes: Control's future producer must independently read
+and hash the local bundle and bind its manifest and database dump before
+calling it. The receipt still makes no restore claim.
+
 ### Added: `transition_receipt` — the Foundation's half of D16's two-sided recovery receipt
 
 New module, `DeploymentTransitionReceipt.v1`: a closed schema
@@ -81,9 +92,8 @@ A record shaped like one built by `external_recovery
 .backup_record_from_receipt` (an executor identifier and a restore duration
 standing in for a real artefact id and byte count) is refused outright
 (`BACKUP_RECORD_NOT_ARTEFACT_BOUND`) rather than accepted on those stand-in
-values — and `backup_record_from_receipt` itself now refuses (`SpecError`) a
-`path` that does not carry the shared `EXTERNAL_BACKUP_PATH_PREFIX`, so its
-one caller (`engine/run.py`) cannot emit a record this detection would miss.
+values. The refusal uses the explicit evidence origin; the path prefix is an
+additional guard against a mislabelled record.
 
 A backup's `dataset` must name a dataset the descriptor's own
 `backup_datasets` actually declares (`BACKUP_DATASET_NOT_DECLARED`), and its

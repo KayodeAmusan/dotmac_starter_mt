@@ -64,6 +64,7 @@ from .authorization_v3 import (
 from .backup import (
     ArtefactClass,
     Assurance,
+    BackupEvidenceOrigin,
     BackupHealth,
     BackupRecord,
     assess,
@@ -461,6 +462,7 @@ __all__ = [
     "Annotation",
     "ArtefactClass",
     "Assurance",
+    "BackupEvidenceOrigin",
     "AuditReport",
     "AUTHORIZATION_RECEIPT_V2_SCHEMA",
     "AuthorizationReceipt",

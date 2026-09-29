@@ -19,7 +19,12 @@ from typing import Any
 from unittest.mock import patch
 
 import pytest
-from dotmac_deployment_foundation.backup import ArtefactClass, Assurance, BackupRecord
+from dotmac_deployment_foundation.backup import (
+    ArtefactClass,
+    Assurance,
+    BackupEvidenceOrigin,
+    BackupRecord,
+)
 from dotmac_deployment_foundation.errors import SecretValueError, SpecError
 from dotmac_deployment_foundation.external_recovery import (
     EXTERNAL_BACKUP_PATH_PREFIX,
@@ -198,6 +203,7 @@ def _backup_record(*, checksum: str | None = None) -> BackupRecord:
         completed_at_epoch=1_700_000_000,
         assurance=Assurance.PROVED,
         artefact_class=ArtefactClass.RECOVERY_BUNDLE,
+        evidence_origin=BackupEvidenceOrigin.LOCAL_ARTEFACT,
     )
 
 
@@ -1001,6 +1007,7 @@ def _record_at(assurance: Assurance) -> BackupRecord:
         completed_at_epoch=1_700_000_000,
         assurance=assurance,
         artefact_class=ArtefactClass.RECOVERY_BUNDLE,
+        evidence_origin=BackupEvidenceOrigin.LOCAL_ARTEFACT,
     )
 
 
@@ -1608,6 +1615,7 @@ def test_a_record_built_by_backup_record_from_receipt_is_refused() -> None:
         path=f"{EXTERNAL_BACKUP_PATH_PREFIX}{external_receipt.executor.identifier}",
         size_bytes=max(1, external_receipt.restore_duration_seconds),
     )
+    assert record.evidence_origin is BackupEvidenceOrigin.EXTERNAL_RECEIPT
     receipt = _receipt(
         spec,
         backup=TransitionBackup(
@@ -1624,6 +1632,51 @@ def test_a_record_built_by_backup_record_from_receipt_is_refused() -> None:
     # near miss: a real, locally written artefact path
     verdict_ok = _verify(spec, _receipt(spec))
     assert TransitionFinding.BACKUP_RECORD_NOT_ARTEFACT_BOUND not in verdict_ok.findings
+
+
+def test_external_origin_with_an_ordinary_path_is_refused() -> None:
+    """A caller can rewrap external receipt fields with a plausible path."""
+    spec = _spec()
+    record = dataclasses.replace(
+        _backup_record(), evidence_origin=BackupEvidenceOrigin.EXTERNAL_RECEIPT
+    )
+    verdict = _verify(spec, _receipt(spec), backup_record=record)
+    assert verdict.findings == (TransitionFinding.BACKUP_RECORD_NOT_ARTEFACT_BOUND,)
+
+
+def test_local_origin_cannot_disguise_an_external_path() -> None:
+    """The path-prefix defense remains effective even for a local assertion."""
+    spec = _spec()
+    record = dataclasses.replace(_backup_record(), path="external:claimed-local")
+    receipt = _receipt(
+        spec,
+        backup=dataclasses.replace(
+            _receipt(spec).backup,
+            bundle_id=record.path,
+        ),
+    )
+    verdict = _verify(spec, receipt, backup_record=record)
+    assert verdict.findings == (TransitionFinding.BACKUP_RECORD_NOT_ARTEFACT_BOUND,)
+
+
+def test_unspecified_origin_cannot_claim_a_local_artefact() -> None:
+    spec = _spec()
+    record = BackupRecord(
+        dataset="primary",
+        path=_BACKUP_PATH,
+        size_bytes=1_000_000,
+        checksum=_database_dump_digest_hex(),
+        checksum_algorithm="sha256",
+        completed_at_epoch=1_700_000_000,
+        assurance=Assurance.PROVED,
+        artefact_class=ArtefactClass.RECOVERY_BUNDLE,
+    )
+    assert record.evidence_origin is BackupEvidenceOrigin.UNSPECIFIED
+    verdict = _verify(spec, _receipt(spec), backup_record=record)
+    assert verdict.findings == (TransitionFinding.BACKUP_RECORD_NOT_ARTEFACT_BOUND,)
+
+    local_verdict = _verify(spec, _receipt(spec))
+    assert local_verdict.findings == ()
 
 
 # ── self-canonicalization / never-raises on BackupRecord shape ─────────────
@@ -1677,6 +1730,7 @@ def test_a_none_backup_record_path_is_a_finding_not_a_crash() -> None:
         completed_at_epoch=1_700_000_000,
         assurance=Assurance.PROVED,
         artefact_class=ArtefactClass.RECOVERY_BUNDLE,
+        evidence_origin=BackupEvidenceOrigin.LOCAL_ARTEFACT,
     )
     verdict = _verify(spec, receipt, backup_record=record)
     assert TransitionFinding.INPUT_NOT_CANONICALIZABLE in verdict.findings

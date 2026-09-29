@@ -32,6 +32,7 @@ import pytest
 from dotmac_deployment_foundation.backup import (
     ArtefactClass,
     Assurance,
+    BackupEvidenceOrigin,
     BackupRecord,
     assess,
 )
@@ -614,15 +615,18 @@ def test_an_accepted_receipt_writes_the_timestamp_nothing_wrote(
     record = backup_record_from_receipt(receipt, path="external:x", size_bytes=1)
     assert record.assurance is Assurance.PROVED
     assert record.artefact_class is ArtefactClass.RECOVERY_BUNDLE
+    assert record.evidence_origin is BackupEvidenceOrigin.EXTERNAL_RECEIPT
     assert record.restore_proved_at_epoch == receipt.proved_at_epoch
 
 
 def test_a_non_prefixed_path_is_refused(
     external_spec: ProductDeploymentSpec, dataset: BackupDataset
 ) -> None:
-    """The prefix is enforced at the ONE producer, not merely documented: the
-    only caller of `backup_record_from_receipt` cannot emit a record that a
-    reader (`transition_receipt.py`) would fail to recognise as external."""
+    """The factory preserves the external: path defense in depth.
+
+    Transition verification primarily identifies external records by their
+    explicit evidence origin, rather than relying on this path spelling.
+    """
     receipt = _accept(
         external_spec, dataset, _envelope(_document(external_spec, dataset))
     )
