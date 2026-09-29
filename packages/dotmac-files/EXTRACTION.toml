@@ -4,7 +4,7 @@ classification = "optional-module"
 status = "audit-complete"
 source_mode = "product-first"
 owner = "Stored bytes and their repairable physical lifecycle on explicit tenant and platform planes"
-contract = "Validate and persist opaque bytes beneath immutable trusted keys selected by a required TenantScope or PlatformScope; record size, media type, checksum, provider binding and physical state; stream, delete and reconcile them through one shared physical engine and two structurally separate persistence tables. NOT domain attachment meaning or authorization, document generation, PDF/spreadsheet semantic parsing, import mapping, dry-run/apply, or domain mutation."
+contract = "Validate and persist opaque bytes beneath immutable trusted keys selected by a required TenantScope or PlatformScope; record size, media type, checksum, provider binding and physical state; stream, delete and reconcile them through one shared physical engine and two structurally separate persistence tables, including the physical recheck of one product-reviewed orphan key. NOT domain attachment meaning or authorization, document generation, PDF/spreadsheet semantic parsing, import mapping, plan review or dry-run/apply orchestration, or domain mutation."
 source_repositories = [
   "dotmac_erp",
   "dotmac_sub",
@@ -22,11 +22,16 @@ source_revisions = [
   "dotmac_vendor_control_plane:0c77e85c7f54538e69061614c8de42ad0f6d2332",
   "dotmac_crm:60daaa2dd305696636632f48505ab784110a55d2",
 ]
+revalidation_revisions = [
+  "dotmac_erp:90d85327ad077e1b02c487b8ba377acfd72ce5d8",
+]
 source_paths = [
   "dotmac_sub:app/services/object_storage.py",
   "dotmac_sub:app/services/file_storage.py",
   "dotmac_sub:app/models/stored_file.py",
   "dotmac_erp:app/services/storage.py",
+  "dotmac_erp:app/tasks/file_object_reconciliation.py",
+  "dotmac_erp:app/services/file_object_cleanup.py",
   "dotmac_erp:app/services/file_upload.py",
   "dotmac_erp:app/services/avatar.py",
   "dotmac_crm:app/services/storage.py",
@@ -41,6 +46,7 @@ preserved_tests = [
   "dotmac_sub:tests/test_object_storage_service.py",
   "dotmac_sub:tests/test_file_storage_service.py",
   "dotmac_erp:tests/services/test_storage.py",
+  "dotmac_erp:tests/services/test_file_object_reconciliation.py",
   "dotmac_erp:tests/services/test_file_upload.py",
   "dotmac_crm:tests/test_storage.py",
   "dotmac_crm:tests/test_upload_mime_validation.py",
@@ -61,7 +67,7 @@ inventory_evidence = [
 first_cutover = "dotmac_erp is cutover 1 because the checked-in product-first procedure requires a qualifying source product to retire its local owner first; ERP supplies the production S3 provider, broad admission policy (including image/PDF/XLS/XLSX signatures), and real callers. It is not yet a contract consumer: ERP's E8 Organization-to-Tenant and composed-migration decision currently classifies dotmac_kernel.db and stateful module lineages as defer-db. The cutover begins only after that gate provides one transaction authority and maps organization scope to the module's TenantScope without a parallel tenant writer. dotmac_academy_app is cutover 2, using its avatar flow as the independent tenant-plane slice. dotmac_vendor_control_plane is candidate cutover 3 on PlatformScope, preserving the exact offline licence bundle handed to an authenticated operator when durable artifact evidence is required; licensing retains the relation and delivery authority."
 shadow_and_drift = "During ERP cutover, inventory every domain-owned key/path reference, create its opaque file relation, compare provider key, organization-to-tenant mapping, byte length and SHA-256, shadow authenticated reads against the same object, and run missing-object/orphan reconciliation in report-only mode before switching reads. Academy then imports each static avatar into an immutable tenant key, compares bytes and SHA-256, shadows the authenticated avatar response, and removes the legacy path only after every row has a verified file id. Vendor CP compares the exact exported bundle bytes and digest with the platform file target while its existing delivery-attempt record remains authoritative for the handoff. Upload creates immutable keys, so rollback drift is repairable by the split list/decide/delete orphan reconciler; deletion is pending-first and idempotently repairable after a crash."
 local_copy_retirement = "ERP must replace app/services/file_upload.py as the lifecycle/policy owner and reduce app/services/storage.py to (or replace it with) an assembly-owned StorageProvider adapter over the exact pinned dotmac-files release; a two-directional import/caller ratchet reaches zero before the local owner is deleted. Sub is the qualifying lifecycle/provider source and must likewise retire `StoredFile`, `file_storage.py` and the lifecycle-owning half of `object_storage.py` at its own adoption, retaining only an assembly provider adapter and domain-owned opaque relations. CRM's generic storage service, upload validation path and direct legal-document filesystem writer are legacy byte owners: retained callers migrate to the exact Files seam or retire with CRM, and their writer paths reach zero. Academy then removes direct static/avatars writes and retires Person.avatar_path after its backfill and fallback-read count reach zero. Vendor CP is greenfield for durable storage: its export route must delegate byte persistence to dotmac-files and keep only the licensing-owned relation/attempt, never create a second generic storage facade. No permanent mirrored lifecycle or path authority is allowed."
-next_action = "0.1.0a4 is now allocated (carrying the engine-free conflict_savepoint import), with publication and its oracle-backed release record still pending in a separate protected change; 0.1.0a3 remains the last published and tagged version until that change lands. The successor must pass the tenant-only and full-plane live-catalog canaries before ERP repins it. The a3 lineage supports TENANT for the deferred ERP cohort and Academy, plus TENANT+PLATFORM for compatibility; it deliberately refuses PLATFORM-only because no named adopter needs it. Finish ERP's E8 Organization-to-Tenant/composed-lineage decision, then prepare its MinIO adapter, inventory, shadow reads and measured caller ratchet without moving authority until every ERP cohort module is ready. Academy remains the second tenant adopter after ERP retires its local generic owner. Vendor CP remains no-adopt unless a real durable-byte requirement is approved."
+next_action = "0.1.0a4 has an annotated tag but is listed in module-release-legacy-unverified.json, with no checked-in producer verification row; confirm release identity in the protected release lane. 0.1.0a5 is a source candidate for reviewed one-key orphan recheck and delete. Before ERP repins a5 or replaces its local sequence, prove that no writer can attach a new reference to the reviewed key after recheck (or provide a reservation honored by all reference writers), and retain immutable-key enforcement. Publish a5 through the verified release lane; ERP keeps plan authorization, durable pre-delete records, outcome commits and the 7-day object-age policy. No production apply is implied. Full ERP module adoption remains gated by E8 Organization-to-Tenant and composed-lineage decisions; Academy follows ERP local-owner retirement."
 
 [[product_writers]]
 product = "dotmac_workspace"
@@ -94,7 +100,7 @@ evidence_paths = ["app/services/storage.py", "app/services/upload_validation.py"
 product = "dotmac_erp"
 writer_state = "qualifying_source"
 retirement_required = true
-revision = "0dc07e4b6dd36260c9510a7115dbdc656e2a19a5"
+revision = "90d85327ad077e1b02c487b8ba377acfd72ce5d8"
 evidence_paths = ["app/services/storage.py", "app/services/file_upload.py", "app/services/avatar.py"]
 [[product_writers]]
 product = "dotmac_sub"

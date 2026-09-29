@@ -1,11 +1,22 @@
 # Changelog — dotmac-files
 
-## 0.1.0a4 — allocated, not yet published
+## 0.1.0a5 — source candidate
+
+- Add a one-key reviewed-orphan operation that checks the live provider
+  identity, authoritative references, exact object presence and object age
+  before deleting. It returns a typed outcome for the product's durable run
+  record; plan authorization and auditing remain product responsibilities.
+- Reject an out-of-scope or duplicate exact-key provider listing and naive
+  timestamps. The caller's reference read must close its transaction before
+  the provider call.
+
+## 0.1.0a4 — tagged; release verification legacy-unverified
 
 Names the engine-free `conflict_savepoint` repair's changed importable source
 as a version distinct from a3, so one released version does not name two
-importable surfaces. Publication and its oracle-backed release record follow
-in a separate protected change.
+importable surfaces. The annotated `dotmac-files-v0.1.0a4` tag exists, but
+`docs/inventories/module-release-legacy-unverified.json` still lists it as
+legacy-unverified; no producer-owned verification row is checked in.
 
 ### Changed
 
