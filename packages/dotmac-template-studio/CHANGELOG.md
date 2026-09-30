@@ -5,6 +5,15 @@ follows [Semantic Versioning](https://semver.org). Pre-1.0 (`0.x`, incl. this
 alpha) the surface is still settling — a `0.MINOR` bump may carry breaking
 changes, each called out here.
 
+## 0.2.0a5 — 2026-09-30
+
+- Add `service.compose_email` for lossless, ordered composition of already
+  rendered email parts, with an explicit primary subject and immutable source
+  parts. Event grouping, recipient policy and delivery remain with their owners.
+- Expose single-brace substitution from `dotmac_template_studio.rendering`
+  without assembling routes, database models or Kernel web dependencies.
+  `service.render` retains its existing error contract for authoring callers.
+
 ## 0.2.0a4 — 2026-08-25
 
 Adopts module contract generation 2 for the staff browser surface.

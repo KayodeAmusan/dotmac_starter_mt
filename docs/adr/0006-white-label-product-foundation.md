@@ -2058,6 +2058,39 @@ canary for the runtime mechanics. It does not prove that a module surface is
 portable across products; that still requires the independent-product adoption
 evidence in § 15.
 
+### Decision amendment — 2026-09-30 (composition of rendered notification content)
+
+Template Studio may compose multiple **already rendered email bodies** into one
+email. The caller supplies the ordered parts and names the part that supplies
+the subject. The composition operation preserves each subject/body as rendered;
+it does not invent a replacement message, remove template copy, resolve an
+event group, infer a recipient, choose a channel, apply consent, or enqueue a
+delivery. Full bodies may repeat greetings until a separately specified
+fragment-template contract exists. The returned ordered parts retain content
+provenance for the adopting product's intent record.
+
+This narrows the Sub payment-notification cutover after its rejected PR #3368:
+that attempt grouped events before their per-channel templates ran, replacing
+receipt content with a generic email and dropping SMS. Sub remains the owner of
+which event facts share a proven payment episode, the bounded wait, and what a
+late fact means. The module owns only the reusable content operation. Consent,
+channel policy, intent and delivery retain their § 5c owners. No product cutover
+is implied by this source addition; the extraction dossier still requires Sub
+to pin a released version, shadow rendering, and retire or gate its local
+renderer at the cutover.
+
+The source audit found no qualifying production multi-message composition
+implementation to port: Sub renders one template at a time, ERP's template
+source is for documents, and #3368 was closed without merging. This pure seam
+therefore adds only the missing shared content operation; Sub's existing
+single-brace renderer and its parity tests remain the product-first source.
+
+The substitution function is also exposed from the package's pure `rendering`
+module. Importing that module must not assemble Template Studio's routes,
+models, or Kernel web dependencies. The existing `service.render` delegates to
+the same function and retains its authoring error contract. This lets Sub run
+shadow parity under its own runtime before any authoring or delivery cutover.
+
 ## Consequences
 
 - F1–P1 have fixed vocabulary. "Module", "theme", "brand", and "facet" mean one

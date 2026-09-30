@@ -3,25 +3,21 @@
 Human developer rules. Agents follow the same canon via `AGENTS.md`
 (the canonical hard-rules list — read it first; nothing here overrides it).
 
-## Gates before every commit
+## Validation and merge gates
 
-Tests run on the dedicated test server (85.190.246.211) in a fresh isolated
-worktree; do not install test dependencies or run test commands on a
-workstation, and never on Dotmac Observer — a capped run there once OOM-killed
-Prometheus (`AGENTS.md`, "Test host"). Local static checks are
-allowed. GitHub CI remains the merge owner.
+Tests run only on Git-hosted CI; do not run test commands or install
+test/development dependencies on a workstation or any named test host.
+Local static checks are allowed. Git-hosted PR CI is the merge owner
+(`AGENTS.md`, "Validation before any commit").
 
 ```bash
-make check        # exact Poetry/lock, ruff, import-linter, mypy, bandit, format
-# On the dedicated test server only:
-make test-unit
-make test-db-up && make test-integration && make test-db-down
-                  # Postgres RLS canaries — required for anything touching
-                  # models, migrations, guards, or tenancy
+# Local: pinned static checks only, without installing test dependencies.
+# Git-hosted PR CI runs make check and make test-unit.
+# For models, migrations, guards, or tenancy, CI also runs:
+# make test-db-up && make test-integration && make test-db-down
 ```
 
-All relevant gates must be green before push. `TEST_DB_PORT` is
-`?=`-overridable if the disposable test-server port is taken.
+All relevant Git-hosted CI gates must be green before merge.
 
 ## Test-first expectations
 

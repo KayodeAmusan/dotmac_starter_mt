@@ -142,6 +142,11 @@
       "reason": "INTENDED UNTIL THE GITHUB ACTIONS PILOT PROVES THE EXACT SNAPSHOT. The adapter owns GitHub's current exact actions_inbound full-domain set, including its transitive result-storage names, but is deliberately absent from release-adapters.json until VMID 124 proves control, acquisition, result upload and provider-recorded success through the rendered proxy before and after a cold reboot. Metadata drift never auto-admits a domain. Remove this row only with the reviewed adapter-lane enrollment and pilot evidence; do not replace exact names with Azure CIDRs or a cloud-wide wildcard.",
       "state": "never-published"
     },
+    "dotmac-template-studio": {
+      "declared": "0.2.0a5",
+      "reason": "DECLARED FOR THE PAYMENT EMAIL COMPOSITION SLICE, NOT YET PUBLISHED. a4 is the latest verified release. a5 adds lossless composition and a pure single-brace renderer import seam, so its source cannot reuse a4's published identity. Remove this row only after the protected module release installs, verifies and tags exact 0.2.0a5; Sub must not exact-pin a5 before that release.",
+      "state": "declared-unpublished"
+    },
     "dotmac-usage": {
       "declared": "0.1.0a1",
       "reason": "SUPPLY-ONLY RELEASE AUTHORIZED BY MICHAEL ON 2026-08-25. Sub is the named intended consumer. Publication makes an immutable artifact available for the separately governed history backfill, dedupe proof and aggregate shadow; it does not compose the module, move usage authority, or retire Sub's writer. Raw AAA, rating, billing and accounting remain separate. Remove this row only in the a1 oracle-backed release record; preserve the adoption gates in EXTRACTION.toml.",

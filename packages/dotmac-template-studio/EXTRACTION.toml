@@ -11,7 +11,7 @@ owner = "Dotmac template capability"
 # over what (channel policy), actually sending it (delivery) and producing a
 # traceable document are four SEPARATE foundation owners with their own dossiers;
 # see the audit's "Audit outcome, part 2 — the capability map".
-contract = "Tenant-authored, safely rendered notification templates: authoring, versioning, publication and render to (subject, body). Not consent, not routing, not delivery, not documents."
+contract = "Tenant-authored notification templates: authoring, versioning, publication, render to (subject, body), and lossless composition of already-rendered email parts with caller-declared order and primary subject. Not event grouping, consent, routing, delivery, or documents."
 source_repositories = ["dotmac_erp", "dotmac_sub", "dotmac_starter_mt"]
 
 source_revisions = [
@@ -39,6 +39,7 @@ preserved_tests = [
   # (ADR-0006 5b). The header of that file records what changed in the port and
   # why each change is faithful rather than a weakening.
   "dotmac_starter_mt:tests/unit/test_template_studio_renderer.py",
+  "dotmac_starter_mt:tests/unit/test_template_studio_composition.py",
 ]
 contract_consumers = []
 candidate_consumers = ["dotmac_erp", "dotmac_sub"]
@@ -48,7 +49,7 @@ inventory_evidence = [
 ]
 first_cutover = "Sub, on the notification contract only, once the renderer is re-based per ADR-0006 5b. The package cannot receive Sub's rows as built: its double-brace substitution syntax is the syntax Sub rejects at save time after it leaked a literal placeholder to customers."
 shadow_and_drift = "Sub's 7 notification_template_renderer tests are the parity proof; shadow rendering against the live single-brace renderer is required before Sub retires its local writer."
-next_action = "ADR-0006 5b is implemented: kind=document is dropped, the renderer is re-based on Sub's single-brace allowlisted contract with its seven tests ported, identity is (tenant, slug, channel), the RenderContext registry and never-clobber executable-spec seeding mechanism ship, and ts_0002 carries the narrowed identity. To reach `adopted`, exact-pin the release in Sub, seed and shadow its notification templates, then retire the local renderer in the same sealed cutover. `reuse-proven` follows only when a second consumer moves onto an exact pin. Out of this package by ruling (5c): consent/suppression, channel policy, delivery/outbox and document generation are four separate foundation owners, each needing its own dossier, with consent sequenced before delivery. Do not absorb them here."
+next_action = "ADR-0006 5b is implemented: kind=document is dropped, the renderer is re-based on Sub's single-brace allowlisted contract with its seven tests ported, identity is (tenant, slug, channel), the RenderContext registry and never-clobber executable-spec seeding mechanism ship, and ts_0002 carries the narrowed identity. The 2026-09-30 content-composition seam has source tests but no adopted consumer; Sub owns payment-episode meaning, not this module. To reach `adopted`, exact-pin a verified release in Sub, seed and shadow its notification templates, then retire the local renderer in the same sealed cutover. `reuse-proven` follows only when a second consumer moves onto an exact pin. Out of this package by ruling (5c): consent/suppression, channel policy, delivery/outbox and document generation are separate foundation owners, each needing its own dossier, with consent sequenced before delivery. Do not absorb them here."
 local_copy_retirement = "The selected source product must consume the released module and retire or gate its local writer before a second product cutover."
 [[product_writers]]
 product = "dotmac_erp"
