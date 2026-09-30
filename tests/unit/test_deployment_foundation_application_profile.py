@@ -27,9 +27,11 @@ from typing import Final
 
 import pytest
 from dotmac_deployment_foundation.application_profile import (
+    ABSENCE_WRONG_CONCERN,
     APPLICATION_PROFILE_SCHEMA,
     BINDING_FIELDS,
     CONCERN_LABELS,
+    INTEGRATION_SURFACE_FAMILIES,
     WORK_ENTRY_POINT_FAMILIES,
     WRITER_DISPOSITIONS,
     AbsenceProof,
@@ -37,6 +39,7 @@ from dotmac_deployment_foundation.application_profile import (
     ConcernBinding,
     FoundationConcern,
     InapplicableConcern,
+    IntegrationSurfaceAbsenceProofV1,
     WriterClaim,
     profile_digest,
     require_profile_readback,
@@ -256,6 +259,105 @@ def test_a_conforming_binding_document_parses() -> None:
         where="control",
     )
     assert parsed.version == "1.0.0"
+
+
+def test_V1_REJECTS_retirement_rather_than_accepting_and_discarding_it() -> None:
+    """`retirement` is in `BINDING_FIELDS`, was never read by the parser, and is
+    never emitted by `as_document`.
+
+    So the PROFILE DIGEST DOES NOT COVER DISPLACEMENT EVIDENCE — a value the
+    digest does not cover is a value nobody is bound to, however carefully it was
+    written. Worse, a document supplying `displaces` WITH its retirement rows was
+    refused by `ConcernBinding.__post_init__` for carrying NO typed retirement
+    evidence: a message false about its own input, sending an operator to add
+    what was already there.
+
+    The accepting path dropped the evidence and the refusing path lied about why.
+    V1 now says the true thing at the parse. Fails before the change: the
+    document below parsed, silently losing `retirement`.
+    """
+    from dotmac_deployment_foundation.application_profile import (
+        _binding_from_document,
+    )
+
+    with pytest.raises(SpecError) as caught:
+        _binding_from_document(
+            {
+                "implementation": "acme-foundation",
+                "version": "1.0.0",
+                "coordinates": COORD,
+                "displaces": ["dotmac_sub.legacy_writer"],
+                "retirement": [{"product": "dotmac_sub", "outstanding": False}],
+            },
+            where="planted",
+        )
+    message = str(caught.value)
+    assert "retirement" in message
+    # The refusal must be ABOUT retirement, not the generic unknown-key message
+    # — `retirement` is a known field of the binding, just not one V1 can bind.
+    assert "unknown binding field" not in message
+
+
+def test_that_rejection_is_not_the_unknown_key_check_wearing_another_name() -> None:
+    """The near miss. `retirement` stays in `BINDING_FIELDS`, so the closed-field
+    check admits it and the specific refusal is what fires. Removing it from the
+    set instead would produce 'unknown binding field', which is false: it IS a
+    field of `ConcernBinding`, carrying real rules in `__post_init__`."""
+    from dotmac_deployment_foundation.application_profile import (
+        BINDING_FIELDS,
+        _binding_from_document,
+    )
+
+    assert "retirement" in BINDING_FIELDS
+    # And an actually-unknown key still gets the generic message, so the two
+    # refusals have not collapsed into one.
+    with pytest.raises(SpecError) as caught:
+        _binding_from_document(
+            {
+                "implementation": "acme-foundation",
+                "version": "1.0.0",
+                "coordinates": COORD,
+                "rate_limit_per_minute": 600,
+            },
+            where="planted",
+        )
+    assert "unknown binding field" in str(caught.value)
+
+
+def test_a_binding_document_WITHOUT_retirement_still_parses() -> None:
+    """Non-vacuity: the rejection must not turn every document into a refusal."""
+    from dotmac_deployment_foundation.application_profile import (
+        _binding_from_document,
+    )
+
+    parsed = _binding_from_document(
+        {
+            "implementation": "acme-foundation",
+            "version": "1.0.0",
+            "coordinates": COORD,
+            "displaces": [],
+        },
+        where="control",
+    )
+    assert parsed.retirement == ()
+
+
+def test_the_profile_digest_does_not_cover_retirement_which_is_WHY_V1_rejects() -> None:
+    """The premise of the rejection, asserted rather than described.
+
+    If `as_document` ever begins emitting `retirement`, this test fails and the
+    rejection above should be revisited in the same change — the reason for it
+    will have gone.
+    """
+    document = _binding().as_document()
+    assert "retirement" not in document
+    assert set(document) == {
+        "coordinates",
+        "displaces",
+        "implementation",
+        "state",
+        "version",
+    }
 
 
 # ── § 9: retirement evidence is typed, and silence is UNKNOWN ───────────────
@@ -579,7 +681,6 @@ def test_generic_admission_mechanism_proven_for_every_concern(
         )
         == ()
     )
-
     # Missing implementation: remove ONLY this concern's implementation.
     installed_missing = _synthetic_installed()
     del installed_missing[implementation]
@@ -601,6 +702,206 @@ def test_generic_admission_mechanism_proven_for_every_concern(
     assert concern.value in findings[0]
     assert "1.0.0" in findings[0]
     assert "9.9.9" in findings[0]
+
+
+# ── a PROVEN ABSENCE is a slot value, and only when ESTABLISHED ────────────
+#
+# `IntegrationSurfaceAbsenceProofV1`'s own docstring described absent-proven as
+# one of four states and said the proof SATISFIES a concern, while the profile
+# refused any slot that was not a binding or an inapplicable. So a product with
+# genuinely no integration surface could construct the proof and still not reach
+# 13/13 — the unmeetable gate the type exists to prevent, reintroduced one level
+# up by the vocabulary it was bolted beside.
+
+ARTIFACT = "acme-app@sha256:" + "e" * 64
+INVENTORY = "sha256:" + "f" * 64
+
+
+def _absence(**over) -> IntegrationSurfaceAbsenceProofV1:
+    fields = {
+        "concern": FoundationConcern.INTEGRATION,
+        "source_revision": REVISION,
+        "artifact_digest": ARTIFACT,
+        "observed_inventory_digest": INVENTORY,
+        "families": dict.fromkeys(INTEGRATION_SURFACE_FAMILIES, ()),
+        "method": "entry-point metadata + AST walk over the installed wheel",
+        "positive_control": ("dotmac_integration.connectors:paystack",),
+        "established_at": "2026-09-05T12:00:00Z",
+        "established_by": "platform-cp-profile-job",
+    }
+    fields.update(over)
+    return IntegrationSurfaceAbsenceProofV1(**fields)  # type: ignore[arg-type]
+
+
+def _absent_profile(**over) -> ApplicationFoundationProfile:
+    return _profile(slots={FoundationConcern.INTEGRATION: _absence(**over)})
+
+
+def test_a_proven_absence_FILLS_a_concern_slot() -> None:
+    """Fails before the change: the profile refused any slot that was not a
+    `ConcernBinding` or an `InapplicableConcern`, so this construction raised."""
+    profile = _absent_profile()
+    assert FoundationConcern.INTEGRATION in profile.absent_proven
+    assert FoundationConcern.INTEGRATION not in profile.bound
+    assert FoundationConcern.INTEGRATION not in profile.inapplicable
+
+
+def test_the_four_states_stay_distinct() -> None:
+    """Bound, absent-proven and inapplicable are three answers, and
+    not-yet-implemented is the fourth by having NO member at all.
+
+    Collapsing any pair is the two-values-for-three-cases shape. The fourth is
+    the 13/13 gate itself: a constructible "owed" member would be the knob that
+    admits an incomplete profile for one deployment.
+    """
+    profile = ApplicationFoundationProfile(
+        application="acme-app",
+        slots={
+            **dict.fromkeys(FoundationConcern, _binding()),
+            FoundationConcern.INTEGRATION: _absence(),
+            FoundationConcern.WORKER_EXECUTION: InapplicableConcern(
+                reason="ruled out", proof=_proof()
+            ),
+        },
+    )
+    assert len(profile.bound) == 11
+    assert profile.absent_proven == (FoundationConcern.INTEGRATION,)
+    assert profile.inapplicable == (FoundationConcern.WORKER_EXECUTION,)
+    assert (
+        len(profile.bound) + len(profile.absent_proven) + len(profile.inapplicable)
+        == 13
+    )
+    # And "owed" is not constructible: a profile missing a concern is refused
+    # rather than filled with a placeholder state.
+    with pytest.raises(SpecError):
+        ApplicationFoundationProfile(
+            application="acme-app",
+            slots={
+                c: _binding()
+                for c in FoundationConcern
+                if c is not FoundationConcern.INTEGRATION
+            },
+        )
+
+
+def test_a_proof_MISFILED_under_another_concern_is_refused() -> None:
+    """The proof carries its own concern and the mapping key is the concern the
+    profile claims about. Until a proof could be a slot the question could not
+    arise; the moment it can, it is the same failure the proof's own type
+    refuses one level down — and the profile is the more dangerous level,
+    because 13/13 is read off the slots."""
+    with pytest.raises(SpecError) as exc:
+        _profile(slots={FoundationConcern.WORKER_EXECUTION: _absence()})
+    assert exc.value.code == ABSENCE_WRONG_CONCERN
+    assert "worker_execution" in str(exc.value)
+    assert "integration" in str(exc.value)
+
+
+def test_the_document_names_the_absent_proven_state() -> None:
+    """A reader of the canonical document must see which of the states a slot
+    is in without inferring it from which keys are present."""
+    document = _absent_profile().as_document()
+    assert document["concerns"]["integration"]["state"] == "absent_proven"
+    assert document["concerns"]["identity_session"]["state"] == "bound"
+
+
+def test_an_ESTABLISHED_absence_verifies_clean() -> None:
+    """The accepting control. Without it every refusal below could belong to a
+    check that admits nothing — which is ADR 0034's own failure."""
+    assert (
+        verify_profile_against_candidate(
+            _absent_profile(),
+            image_digest=IMAGE,
+            installed=_installed(),
+            artifact_digest=ARTIFACT,
+            observed_inventory_digests={FoundationConcern.INTEGRATION: INVENTORY},
+        )
+        == ()
+    )
+
+
+def test_an_absence_with_NO_artifact_digest_is_a_finding_not_a_pass() -> None:
+    """The bypass this closes. Had the verifier skipped an absent-proven slot
+    the way it skips a non-binding one, a well-formed proof of nothing would
+    fill a concern and reach 13/13 with nobody examining an artifact."""
+    findings = verify_profile_against_candidate(
+        _absent_profile(), image_digest=IMAGE, installed=_installed()
+    )
+    assert findings
+    assert any("ESTABLISHED" in item for item in findings)
+
+
+def test_an_absence_with_NO_observed_inventory_is_a_finding() -> None:
+    """The unmanufacturable half is exactly this comparison. Without it the slot
+    is a caller's own string agreeing with itself."""
+    findings = verify_profile_against_candidate(
+        _absent_profile(),
+        image_digest=IMAGE,
+        installed=_installed(),
+        artifact_digest=ARTIFACT,
+    )
+    assert findings
+    assert any("independently observed" in item for item in findings)
+
+
+def test_a_proof_for_ANOTHER_artifact_is_a_finding() -> None:
+    """Perfectly well-formed, produced for a different build, says nothing about
+    this one."""
+    findings = verify_profile_against_candidate(
+        _absent_profile(),
+        image_digest=IMAGE,
+        installed=_installed(),
+        artifact_digest="acme-app@sha256:" + "1" * 64,
+        observed_inventory_digests={FoundationConcern.INTEGRATION: INVENTORY},
+    )
+    assert findings and any("another build" in item for item in findings)
+
+
+def test_a_MANUFACTURED_inventory_digest_is_a_finding() -> None:
+    """A caller can write any string into the proof; it cannot make that string
+    equal one an independent party derived from the artifact."""
+    findings = verify_profile_against_candidate(
+        _absent_profile(),
+        image_digest=IMAGE,
+        installed=_installed(),
+        artifact_digest=ARTIFACT,
+        observed_inventory_digests={
+            FoundationConcern.INTEGRATION: "sha256:" + "9" * 64
+        },
+    )
+    assert findings
+
+
+def test_the_absence_is_checked_against_the_ARTIFACT_not_the_IMAGE() -> None:
+    """Two digests, and they are not the same value.
+
+    `image_digest` is the candidate OCI image and is what a BINDING is checked
+    against; `artifact_digest` is the Platform application wheel and is what a
+    PROVEN ABSENCE is checked against. Comparing a proof against the image
+    digest could never match, and the gate would be unsatisfiable — the failure
+    that looks like strictness. Passing the image digest as the artifact one
+    must therefore be refused rather than quietly admitted.
+    """
+    findings = verify_profile_against_candidate(
+        _absent_profile(),
+        image_digest=IMAGE,
+        installed=_installed(),
+        artifact_digest=IMAGE,
+        observed_inventory_digests={FoundationConcern.INTEGRATION: INVENTORY},
+    )
+    assert findings, "the image digest was accepted where the artifact's belongs"
+
+
+def test_a_profile_with_no_absence_is_unaffected_by_the_new_inputs() -> None:
+    """Non-vacuity in the other direction: the added parameters must not turn
+    every existing profile into a finding, or the checks above would be passing
+    because nothing verifies any more."""
+    assert (
+        verify_profile_against_candidate(
+            _profile(), image_digest=IMAGE, installed=_installed()
+        )
+        == ()
+    )
 
 
 # ── § 8: the read-back COMPARES, never DERIVES ──────────────────────────────

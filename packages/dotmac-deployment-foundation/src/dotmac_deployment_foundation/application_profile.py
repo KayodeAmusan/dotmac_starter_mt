@@ -804,7 +804,27 @@ class InapplicableConcern:
         }
 
 
-ConcernSlot = ConcernBinding | InapplicableConcern
+#: WHAT A CONCERN SLOT MAY HOLD. Three constructible members for the four
+#: states, and the fourth is deliberately not constructible.
+#:
+#: * :class:`ConcernBinding` — **bound**: a provider exists and answers;
+#: * :class:`IntegrationSurfaceAbsenceProofV1` — **absent-proven**: the
+#:   concern's subject is genuinely not there, established rather than assumed;
+#: * :class:`InapplicableConcern` — **inapplicable**: refused by a standing
+#:   ruling, carrying the ruling and an executable proof;
+#: * **not-yet-implemented** has NO member, and that is the 13/13 gate. It is
+#:   the absence of a slot, and :class:`ApplicationFoundationProfile` refuses a
+#:   profile with any concern unfilled. A constructible "owed" member would be
+#:   the knob that admits an incomplete profile for one deployment.
+#:
+#: ``IntegrationSurfaceAbsenceProofV1`` joined this union on 2026-09-05. Before
+#: that it was a type nobody could put anywhere: its own docstring described
+#: absent-proven as one of four states and said it SATISFIES a concern, while
+#: the profile refused any slot that was not a binding or an inapplicable. So a
+#: product with genuinely no integration surface could construct the proof and
+#: still not reach 13/13 — the unmeetable gate the type was written to prevent,
+#: reintroduced one level up by the vocabulary it was bolted beside.
+ConcernSlot = ConcernBinding | InapplicableConcern | IntegrationSurfaceAbsenceProofV1
 
 
 @dataclasses.dataclass(frozen=True, slots=True)
@@ -845,12 +865,36 @@ class ApplicationFoundationProfile:
         wrong = sorted(
             concern.value
             for concern, slot in self.slots.items()
-            if not isinstance(slot, ConcernBinding | InapplicableConcern)
+            if not isinstance(
+                slot,
+                ConcernBinding | InapplicableConcern | IntegrationSurfaceAbsenceProofV1,
+            )
         )
         if wrong:
             raise SpecError(
-                f"the profile for {self.application!r} fills {wrong} with "
-                "neither a ConcernBinding nor an InapplicableConcern"
+                f"the profile for {self.application!r} fills {wrong} with none "
+                "of the three slot values: a ConcernBinding, a proven absence, "
+                "or an InapplicableConcern"
+            )
+        # A proof carries its OWN concern, and the mapping key is the concern the
+        # profile is claiming about. Nothing checked they agreed, because until
+        # a proof could be a slot the question could not arise — and the moment
+        # it can, it is the same failure the proof's own type refuses one level
+        # down: one concern's evidence certifying another's emptiness. A profile
+        # is the more dangerous level for it, because 13/13 is read off the slots.
+        misfiled = sorted(
+            f"{concern.value} is filled by a proof about {slot.concern.value}"
+            for concern, slot in self.slots.items()
+            if isinstance(slot, IntegrationSurfaceAbsenceProofV1)
+            and slot.concern is not concern
+        )
+        if misfiled:
+            raise SpecError(
+                f"the profile for {self.application!r} misfiles proven "
+                f"absences: {misfiled}. A proof establishes the absence of the "
+                "concern it names and of no other; filed elsewhere it is a "
+                "well-formed claim about a question nobody asked",
+                code=ABSENCE_WRONG_CONCERN,
             )
 
     @property
@@ -859,6 +903,22 @@ class ApplicationFoundationProfile:
             concern
             for concern in FoundationConcern
             if isinstance(self.slots[concern], ConcernBinding)
+        )
+
+    @property
+    def absent_proven(self) -> tuple[FoundationConcern, ...]:
+        """Concerns whose subject was established ABSENT.
+
+        A distinct answer from :attr:`inapplicable`, and the two must not be
+        read together: inapplicable means a standing ruling says the question
+        does not arise here, absent-proven means the question arose, was asked
+        of the artifact, and the answer was nothing. One is a decision and the
+        other is a measurement.
+        """
+        return tuple(
+            concern
+            for concern in FoundationConcern
+            if isinstance(self.slots[concern], IntegrationSurfaceAbsenceProofV1)
         )
 
     @property
@@ -971,6 +1031,41 @@ def _binding_from_document(
             "or the entitlement surface",
             where=where,
         )
+    # V1 REJECTS retirement evidence rather than accepting and discarding it.
+    #
+    # `retirement` is in `BINDING_FIELDS`, so the closed-field check above lets
+    # it through; this parser never read it; and `ConcernBinding.as_document`
+    # never emits it. Three consequences followed, and the third is why this is
+    # a refusal rather than a TODO:
+    #
+    #   * the PROFILE DIGEST DOES NOT COVER DISPLACEMENT EVIDENCE. A value the
+    #     digest does not cover is a value nobody is bound to, however carefully
+    #     it was written;
+    #   * a caller supplying `displaces` WITH its `retirement` rows was refused
+    #     by `ConcernBinding.__post_init__` for carrying NO typed retirement
+    #     evidence — a message that is FALSE ABOUT ITS INPUT, because the input
+    #     carried exactly that. An operator reading it would go and add what was
+    #     already there;
+    #   * so the accepting path silently dropped the evidence and the refusing
+    #     path lied about why. Neither is a state to leave reachable.
+    #
+    # V2 represents displacement and retirement canonically — the profile binds
+    # the specific legacy responsibility and its evidence reference, and terminal
+    # retirement binds back to the replacing assembly and provider. Until then V1
+    # says so, at the parse, in a message that is true about the document it was
+    # handed.
+    if "retirement" in document:
+        raise SpecError(
+            f"{where}: this document carries `retirement`, and "
+            "ApplicationFoundationProfile.v1 cannot bind it — `as_document` "
+            "does not emit it, so the profile digest would not cover it and "
+            "nothing would be bound to what you wrote. Accepting and discarding "
+            "it is worse than refusing: the binding would then be refused for "
+            "carrying no retirement evidence, which is false about this "
+            "document. Displacement and retirement are represented canonically "
+            "in the successor admission contract; V1 rejects them",
+            where=where,
+        )
     return ConcernBinding(
         implementation=str(document["implementation"]),
         version=str(document["version"]),
@@ -982,11 +1077,65 @@ def _binding_from_document(
 # ── B5: verify before deployment, read back after ────────────────────────────
 
 
+def _absence_findings(
+    concern: FoundationConcern,
+    slot: IntegrationSurfaceAbsenceProofV1,
+    *,
+    label: str,
+    artifact_digest: str,
+    observed: Mapping[FoundationConcern, str],
+) -> list[str]:
+    """Re-ask a proven absence against independently derived values.
+
+    Split out rather than inlined because the establishment rule is the reason
+    an absence may fill a slot at all, and a rule buried in a loop body next to
+    two version comparisons reads as one more check rather than as the thing
+    holding the gate up.
+
+    Every branch is a FINDING and none is a skip. The two missing-input cases
+    are findings for the same reason a missing binding is: an oracle that could
+    not be consulted has not agreed with anything, and reporting silence as
+    agreement is how "13/13" stops meaning what it says.
+    """
+    findings: list[str] = []
+    if not str(artifact_digest).strip():
+        findings.append(
+            f"{concern.value} ({label}) is filled by a proven absence and no "
+            "artifact digest was supplied, so the proof could not be checked "
+            "against anything. A proof satisfies only when ESTABLISHED; an "
+            "oracle nobody consulted is not agreement"
+        )
+        return findings
+    inventory = str(observed.get(concern, "")).strip()
+    if not inventory:
+        findings.append(
+            f"{concern.value} ({label}) is filled by a proven absence and no "
+            "independently observed inventory digest was supplied for it. The "
+            "unmanufacturable half of the proof is exactly this comparison — "
+            "without it the slot is a caller's own string agreeing with itself"
+        )
+        return findings
+    if not slot.satisfies(
+        concern, artifact_digest=artifact_digest, inventory_digest=inventory
+    ):
+        findings.append(
+            f"{concern.value} ({label}) carries a proven absence that does NOT "
+            f"establish anything about this artifact: the proof names "
+            f"{slot.artifact_digest} / {slot.observed_inventory_digest} and the "
+            f"artifact in hand is {artifact_digest} / {inventory}. A proof "
+            "produced for another build is well-formed and says nothing about "
+            "this one"
+        )
+    return findings
+
+
 def verify_profile_against_candidate(
     profile: ApplicationFoundationProfile,
     *,
     image_digest: str,
     installed: Mapping[str, str],
+    artifact_digest: str = "",
+    observed_inventory_digests: Mapping[FoundationConcern, str] | None = None,
 ) -> tuple[str, ...]:
     """Every way the profile disagrees with what the CANDIDATE IMAGE holds.
 
@@ -1011,14 +1160,59 @@ def verify_profile_against_candidate(
     one; the binding naming a version installed in the CHECKOUT but absent from
     the IMAGE. The third is why ``installed`` is the image's inventory and never
     the source tree's.
+
+    ## Proven absences are RE-ESTABLISHED here, and this is the half that keeps
+    ## the gate from being bypassable
+
+    A proven absence became a slot value on 2026-09-05, and admitting it is the
+    easy half. The load-bearing half is Michael's standing constraint: **it
+    satisfies only when ESTABLISHED, never when merely well-formed.**
+
+    Construction settles well-formedness and nothing else — a caller can write
+    any string into ``observed_inventory_digest``. So every absent-proven slot
+    is re-asked here against values the CALLER derived independently, through
+    the proof's own :meth:`~IntegrationSurfaceAbsenceProofV1.satisfies`, which
+    compares rather than trusts.
+
+    **A slot whose evidence was not supplied is a FINDING, never a pass.** That
+    is the whole point: had the verifier skipped an absent-proven slot the way
+    it skips a non-binding one, a well-formed proof of nothing would have filled
+    a concern and reached 13/13 without anybody examining an artifact. Silence
+    and establishment must not produce the same outcome.
+
+    ## Two digests, and they are not the same value
+
+    ``image_digest`` is the candidate OCI image, and it is what a BINDING is
+    checked against. ``artifact_digest`` is the Platform application wheel, and
+    it is what a PROVEN ABSENCE is checked against — a proof travelling inside
+    an image cannot name that image, which is why the proof's field was renamed
+    away from ``image_digest`` in the first place. Comparing a proof against the
+    image digest would never match and would make the gate unsatisfiable, which
+    is the failure that looks like strictness.
+
+    ``artifact_digest`` defaults to empty so a profile with no proven absence is
+    unaffected. A profile that HAS one and no artifact digest is a finding — an
+    unavailable oracle is not a pass.
     """
     _require_coordinate(image_digest, where="candidate image_digest")
+    observed = dict(observed_inventory_digests or {})
     findings: list[str] = []
     for concern in FoundationConcern:
         slot = profile.slots[concern]
+        label = CONCERN_LABELS[concern]
+        if isinstance(slot, IntegrationSurfaceAbsenceProofV1):
+            findings.extend(
+                _absence_findings(
+                    concern,
+                    slot,
+                    label=label,
+                    artifact_digest=artifact_digest,
+                    observed=observed,
+                )
+            )
+            continue
         if not isinstance(slot, ConcernBinding):
             continue
-        label = CONCERN_LABELS[concern]
         present = installed.get(slot.implementation)
         if present is None:
             findings.append(

@@ -1,0 +1,286 @@
+{
+  "$comment": [
+    "TWO-DIRECTIONAL PARITY MAP for removing Platform CP's local profile dialect.",
+    "Design evidence for",
+    "docs/superpowers/specs/2026-09-05-foundation-concern-contribution-contract.md",
+    "section 11, gate point 8. DESIGN ONLY -- nothing consumes this yet.",
+    "",
+    "## Two directions, and why both",
+    "",
+    "The generic path must reproduce every legacy case (none may be lost) AND",
+    "must add the cases the dialect could not express (or it has reproduced the",
+    "dialect rather than replaced it). A one-directional map would let either",
+    "half slip: a shrinking count reads as cleanup, a growing one as progress.",
+    "",
+    "## The 53 are a COUNT here, not a list, and that is a stated gap",
+    "",
+    "Platform's inventory (d7b8ca6a) holds the rows: 33 verifier, 14 builder,",
+    "6 type-boundary. They live in Platform's repository and are NOT restated",
+    "here -- a copy would be a second authority that drifts. `legacy_total` is",
+    "the number this map is accountable to; the Platform lane owns the",
+    "row-by-row mapping and must supply it before the parity gate can pass.",
+    "",
+    "## Why the legacy count cannot simply be matched",
+    "",
+    "The dialect collapses provider, binding and verification into ONE",
+    "declaration plus an import probe. Shapes it cannot STATE it cannot TEST,",
+    "so nine cases below have no legacy counterpart by construction. Passing 53",
+    "and adding none of them would mean the generic path reproduced the dialect.",
+    "## The gate, not merely the debt",
+    "",
+    "`parity_gate_passed` is FALSE and deleting Platform's dialect requires it",
+    "TRUE. Recording the debt was not enough: the previous revision asserted",
+    "`legacy_rows_supplied_here` stays false and nothing failed if deletion",
+    "proceeded while it was. A field that records an obligation without blocking",
+    "on it is a note, not a gate.",
+    "",
+    "Flipping it requires the per-row mapping of all 53 legacy cases, supplied by",
+    "the Platform lane, AND pinned retained-artifact cross-repository evidence that",
+    "the generic Foundation admission path admits the retained Platform bytes, with",
+    "proof of direct owner-contract composition and no semantic shim or local",
+    "receipt writer. This repository cannot manufacture or claim that evidence",
+    "locally. Until every condition exists, step 5 of the migration (deleting the builder, canonicalizer and",
+    "verifier) may not proceed.",
+    "",
+    "## `nonce_only` was DROPPED in revision 3",
+    "",
+    "It was a case under revision 1, where a Foundation-issued nonce was the",
+    "liveness signal. Revision 3 removes the nonce entirely -- there is no",
+    "`nonce_echo` field and no nonce to echo -- so the shape cannot be",
+    "represented and the row could never fire. A provider that answers positively",
+    "while implementing nothing is now `answers_everything`, which is a real and",
+    "fireable case; keeping both would have been one defect wearing two names,",
+    "and the ratchet would have frozen the duplicate in place.",
+    "",
+    "The historical defeat is recorded in the design's section 3.0, which is",
+    "where a defeated design belongs -- not as a test case that cannot fail.",
+    "",
+    "## The ratchet",
+    "",
+    "`legacy_total` and the length of `added` are both fixed. A change in",
+    "either direction requires an explicit row change in this file, so a case",
+    "cannot appear or vanish as a side effect.",
+    "",
+    "## Platform's row map is the join partner (74dab8a8)",
+    "",
+    "Its four states sum to 53, which is the number this file is accountable to,",
+    "so the two halves now reconcile arithmetically rather than by assertion.",
+    "",
+    "The five UNMAPPED rows are all envelope-level and had no successor code at",
+    "all: `missing` is per-concern, and N17's 'name the highest stage actually",
+    "attained' makes 13x`missing` unrepresentable for a document never read. The",
+    "contract's section 3A.1 adds an envelope stage to close them.",
+    "",
+    "## Two added cases are NOT new, and saying so keeps the list honest",
+    "",
+    "`foreign_inventory` and `unknown_key` have legacy counterparts. They are",
+    "still required -- a case with a counterpart still has to be reproduced -- but",
+    "counting them as gains would overstate what the successor adds.",
+    "`added_new_total` is the honest number; `added_total` is the obligation."
+  ],
+  "added": [
+    {
+      "absent_from_dialect_because": "an import probe cannot observe outcomes at all",
+      "case": "all_negative",
+      "legacy_relation": "no_counterpart",
+      "requires": "the battery runs and EVERY outcome is negative (broken_shut)"
+    },
+    {
+      "absent_from_dialect_because": "the dual of all-negative; needs Foundation-defined negative scenarios, which the dialect has none of",
+      "case": "answers_everything",
+      "legacy_relation": "no_counterpart",
+      "requires": "positive scenarios pass AND negative scenarios also 'pass'"
+    },
+    {
+      "absent_from_dialect_because": "the dialect accepts a locally computed digest, so this is the shape it institutionalises",
+      "case": "foreign_inventory",
+      "legacy_relation": "has_counterpart",
+      "requires": "an inventory digest supplied by the caller rather than computed by Foundation over typed entries"
+    },
+    {
+      "absent_from_dialect_because": "the dialect has no injection site and no provider artifact identity to compare, so 'right site, wrong provenance' is not expressible",
+      "case": "foreign_provenance",
+      "legacy_relation": "no_counterpart",
+      "requires": "an object at the DECLARED injection site whose artifact identity is not the resolved provider's"
+    },
+    {
+      "absent_from_dialect_because": "V1 cannot bind retirement at all and now refuses it; the dialect discards it",
+      "case": "retirement_round_trip",
+      "legacy_relation": "no_counterpart",
+      "requires": "displacement and terminal retirement survive encode->digest->decode and bind back to the replacing assembly and provider"
+    },
+    {
+      "absent_from_dialect_because": "Platform's dialect collapses provider/binding/verification into one declaration, so an unwired provider is not expressible",
+      "case": "uninjected",
+      "legacy_relation": "approximated",
+      "requires": "provider resolves, no consumer binding joins it"
+    },
+    {
+      "absent_from_dialect_because": "the dialect closes encoding only",
+      "case": "unknown_key",
+      "legacy_relation": "has_counterpart",
+      "requires": "any document carries a key outside the closed set, on DECODE"
+    },
+    {
+      "absent_from_dialect_because": "the dialect's identities are module-scoped, so the case cannot arise in it",
+      "case": "wrong_assembly",
+      "legacy_relation": "no_counterpart",
+      "requires": "a verification joins a binding from a different assembly"
+    },
+    {
+      "absent_from_dialect_because": "the dialect's identities are module-scoped; a re-composed assembly at the same artifact is indistinguishable in it",
+      "case": "wrong_composition",
+      "legacy_relation": "no_counterpart",
+      "requires": "a verification naming a composition_digest other than the binding's, with the SAME assembly artifact"
+    },
+    {
+      "absent_from_dialect_because": "the dialect has no injection site to disagree with",
+      "case": "wrong_site",
+      "legacy_relation": "no_counterpart",
+      "requires": "an object is present at a site other than the declared typed injection site"
+    }
+  ],
+  "added_new_total": 7,
+  "added_total": 10,
+  "case_join": {
+    "$comment": "Case-by-case against Platform's `added` at the pin. AGREE means both sides classify the legacy relationship the same way. The three one-sided entries are VERSION SKEW and are named as such.",
+    "agree": [
+      "foreign_inventory",
+      "unknown_key",
+      "all_negative",
+      "answers_everything",
+      "retirement_round_trip",
+      "wrong_assembly",
+      "wrong_site"
+    ],
+    "disagree": [
+      {
+        "case": "uninjected",
+        "foundation": "new_to_the_successor: true",
+        "platform": "approximated",
+        "resolution": "Platform is right and this map is coarse. It carries a legacy row (`concern_spec_bound_without_a_consumer`): Platform asserted the requirement at construction and could not OBSERVE it, so the runtime refusal is new and the intent is not. A boolean cannot say that. `legacy_relation` replaces the boolean with Platform's three-value vocabulary."
+      }
+    ],
+    "version_skew": [
+      {
+        "case": "nonce_only",
+        "only_in": "platform",
+        "why": "dropped in Foundation revision 3 \u2014 the nonce no longer exists, so the row could never fire. Platform measured against revision 2, which still had it."
+      },
+      {
+        "case": "foreign_provenance",
+        "only_in": "foundation",
+        "why": "added in revision 5 (F6). Post-dates Platform's measurement."
+      },
+      {
+        "case": "wrong_composition",
+        "only_in": "foundation",
+        "why": "added in revision 4. Post-dates Platform's measurement."
+      }
+    ]
+  },
+  "envelope_join": {
+    "$comment": "The five rows that BLOCK DELETION, joined by Platform row id to the Foundation code that closes each. Section 3A.1 of the contract adds the envelope stage; this is the row-level evidence that it closes all five rather than most of them.",
+    "rows": [
+      {
+        "foundation_code": "envelope_absent",
+        "note": "the only verdict this programme has ever observed against a real image",
+        "platform_case": "document_absent",
+        "row_id": "PCP-V-01"
+      },
+      {
+        "foundation_code": "envelope_not_utf8",
+        "note": "",
+        "platform_case": "document_not_utf8",
+        "row_id": "PCP-V-02"
+      },
+      {
+        "foundation_code": "envelope_not_json",
+        "note": "",
+        "platform_case": "document_not_json",
+        "row_id": "PCP-V-03"
+      },
+      {
+        "foundation_code": "envelope_not_an_object",
+        "note": "",
+        "platform_case": "document_not_an_object",
+        "row_id": "PCP-V-04"
+      },
+      {
+        "foundation_code": "envelope_contract_unknown",
+        "note": "Platform records this as PARTIAL: `contract_mismatch` covers a CONSUMER naming another contract, not an unknown contract in the envelope. The envelope code is what closes the remainder.",
+        "platform_case": "contract_unknown",
+        "row_id": "PCP-V-11"
+      }
+    ],
+    "unmapped_rows_closed": 5,
+    "unmapped_rows_total": 5
+  },
+  "legacy_breakdown": {
+    "builder": 14,
+    "type_boundary": 6,
+    "verifier": 33
+  },
+  "legacy_rows_owned_by": "platform-cp inventory d7b8ca6a",
+  "legacy_rows_supplied_here": false,
+  "legacy_total": 53,
+  "parity_gate_passed": false,
+  "parity_gate_requires": [
+    "the counterpart artifact is fetched at its pinned commit and its sha256 matches `counterpart_sha256`",
+    "a retained Platform artifact at immutable coordinates has a cross-repository `ApplicationFoundationAdmissionReceiptV1` whose five-part join matches the retained artifact, not a source checkout or rebuilt candidate",
+    "the cross-repository evidence proves direct Foundation owner-contract composition; no Platform-to-Foundation semantic translator, compatibility shim, local canonicalizer, local verifier, or local receipt writer remains",
+    "the evidence names the exact immutable verifier artifact and its `EvaluatorRegistrationDigestV1`; an unavailable or unregistered evaluator blocks admission",
+    "every Platform row in state `unmapped` has a Foundation code in `envelope_join`",
+    "Platform's four map_states sum to `legacy_total`",
+    "every case present in BOTH `added` lists agrees on its `legacy_relation`",
+    "`measured_against_foundation_revision` equals this contract's revision, or every difference is classified as version skew"
+  ],
+  "retained_artifact_cross_repository_evidence": {
+    "status": "unavailable-blocks-parity-gate",
+    "required_receipt_schema": "ApplicationFoundationAdmissionReceipt.v1",
+    "required_join": "five-part receipt join",
+    "required_verifier_registry": "EvaluatorRegistrationDigestV1",
+    "reason": "Design-only: no retained-artifact admission receipt or reviewed evaluator registration is claimed here."
+  },
+  "no_shim_or_local_writer_evidence": {
+    "status": "unavailable-blocks-parity-gate",
+    "forbidden": [
+      "Platform-to-Foundation semantic translator",
+      "compatibility shim",
+      "Platform local canonicalizer",
+      "Platform local verifier",
+      "Platform local receipt writer"
+    ],
+    "required_positive_evidence": "cross-repository retained-artifact scan showing direct owner-contract composition"
+  },
+  "platform_row_map": {
+    "commit": "74dab8a8ec97bd8492d4eec5bde4edab74d4c957",
+    "counterpart_sha256": "5d69b4a59fa3dd7c17674e319c60ef46f376d7e6fcfd102bafc98ab75bbfd6aa",
+    "measured_against_foundation_revision": 2,
+    "measured_against_note": "Platform's map was measured against revision 2 of the Foundation contract. This map is revision 8. The skew is RECORDED rather than silently reconciled: three of the differences below are version skew, not disagreement, and a join that could not tell those apart would report progress as a defect.",
+    "path": "docs/inventories/platform-parity-row-map.json",
+    "repository": "michaelayoade/dotmac_platform_control_plane",
+    "repository_pr": "platform-cp#170",
+    "row_identity": "PCP-<surface>-<ordinal>, allocated once and NEVER reused",
+    "row_identity_note": "A retired row SPENDS its ordinal. Reuse would silently re-point a foreign reference at a different property, which is the one failure a stable identifier exists to prevent.",
+    "schema": "platform-parity-row-map/1",
+    "states": {
+      "mapped": 33,
+      "migrates": 13,
+      "retires": 2,
+      "unmapped": 5
+    },
+    "unmapped_blocks_deletion": true,
+    "unmapped_resolution": "All five are ENVELOPE-level and none had a successor code. The contract's section 3A.1 adds an envelope admission stage before `declared` with six refusals, which is where these five map. `document_absent` is the only verdict this programme has ever observed against a real image.",
+    "unmapped_rows": [
+      "document_absent",
+      "document_not_utf8",
+      "document_not_json",
+      "document_not_an_object",
+      "contract_unknown"
+    ],
+    "verified_at_pin": true,
+    "verified_unmoved_at_head": true
+  },
+  "status": "design-only"
+}

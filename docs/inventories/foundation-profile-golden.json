@@ -1,0 +1,134 @@
+{
+  "$comment": [
+    "GOLDEN BYTE FIXTURE for the proposed concern-contribution contract.",
+    "Design evidence for",
+    "docs/superpowers/specs/2026-09-05-foundation-concern-contribution-contract.md",
+    "",
+    "Generated from the SHIPPED canonicalizer, never written by hand. It pins",
+    "one profile that exercises both slot kinds a reviewer must be able to see:",
+    "twelve bound concerns and one ABSENT-PROVEN, which is the slot value that",
+    "became representable on 2026-09-05.",
+    "",
+    "`canonical_length` and `profile_digest` are what a second implementation",
+    "must reproduce byte for byte. They are the whole point of a golden fixture:",
+    "a canonical form nobody has ever compared across two implementations is a",
+    "convention, not a contract.",
+    "",
+    "A fixture nobody re-derives rots into a decoration, which is the exact",
+    "shape the design it supports is about. It is re-derived by",
+    "tests/architecture/test_foundation_contribution_contract_design.py."
+  ],
+  "canonical_length": 3320,
+  "document": {
+    "application": "acme-app",
+    "concerns": {
+      "api_web_interaction": {
+        "coordinates": "acme-foundation@sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "displaces": [],
+        "implementation": "acme-foundation",
+        "state": "bound",
+        "version": "1.0.0"
+      },
+      "audit_telemetry": {
+        "coordinates": "acme-foundation@sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "displaces": [],
+        "implementation": "acme-foundation",
+        "state": "bound",
+        "version": "1.0.0"
+      },
+      "authorization": {
+        "coordinates": "acme-foundation@sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "displaces": [],
+        "implementation": "acme-foundation",
+        "state": "bound",
+        "version": "1.0.0"
+      },
+      "data_governance": {
+        "coordinates": "acme-foundation@sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "displaces": [],
+        "implementation": "acme-foundation",
+        "state": "bound",
+        "version": "1.0.0"
+      },
+      "deployment_recovery": {
+        "coordinates": "acme-foundation@sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "displaces": [],
+        "implementation": "acme-foundation",
+        "state": "bound",
+        "version": "1.0.0"
+      },
+      "edge_security": {
+        "coordinates": "acme-foundation@sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "displaces": [],
+        "implementation": "acme-foundation",
+        "state": "bound",
+        "version": "1.0.0"
+      },
+      "health_runtime_admission": {
+        "coordinates": "acme-foundation@sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "displaces": [],
+        "implementation": "acme-foundation",
+        "state": "bound",
+        "version": "1.0.0"
+      },
+      "identity_session": {
+        "coordinates": "acme-foundation@sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "displaces": [],
+        "implementation": "acme-foundation",
+        "state": "bound",
+        "version": "1.0.0"
+      },
+      "integration": {
+        "artifact_digest": "acme-app@sha256:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+        "concern": "integration",
+        "established_at": "2026-09-05T12:00:00Z",
+        "established_by": "platform-cp-profile-job",
+        "families": {
+          "external_api_client": [],
+          "inbound_webhook": [],
+          "message_consumer": [],
+          "outbound_connector": [],
+          "scheduled_sync": []
+        },
+        "method": "entry-point metadata + AST walk over the installed wheel",
+        "observed_inventory_digest": "sha256:ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+        "positive_control": [
+          "dotmac_integration.connectors:paystack"
+        ],
+        "schema": "IntegrationSurfaceAbsenceProofV1",
+        "source_revision": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "state": "absent_proven"
+      },
+      "persistence_migrations": {
+        "coordinates": "acme-foundation@sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "displaces": [],
+        "implementation": "acme-foundation",
+        "state": "bound",
+        "version": "1.0.0"
+      },
+      "request_evidence_context": {
+        "coordinates": "acme-foundation@sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "displaces": [],
+        "implementation": "acme-foundation",
+        "state": "bound",
+        "version": "1.0.0"
+      },
+      "settings_secrets": {
+        "coordinates": "acme-foundation@sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "displaces": [],
+        "implementation": "acme-foundation",
+        "state": "bound",
+        "version": "1.0.0"
+      },
+      "worker_execution": {
+        "coordinates": "acme-foundation@sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "displaces": [],
+        "implementation": "acme-foundation",
+        "state": "bound",
+        "version": "1.0.0"
+      }
+    },
+    "schema": "ApplicationFoundationProfile.v1"
+  },
+  "profile_digest": "sha256:aa4e0f9334c57d089efc3b85debfa49f5103a0bbf2cf59d756948b4d3c906b4a"
+}
