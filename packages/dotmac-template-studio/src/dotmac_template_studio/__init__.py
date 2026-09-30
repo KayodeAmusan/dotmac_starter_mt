@@ -34,6 +34,8 @@ and may change without a contract bump.
 - `service` — the module's own logic, for a product that wants to render a
   template from its own code rather than over HTTP. This is the SUPPORTED way to
   reach Template Studio in-process; the models are not.
+- `rendering.render` — single-brace substitution without loading the module's
+  web surface or persistence service.
 
 ## What a consumer must NOT do
 
@@ -44,21 +46,24 @@ parallel-writer problem the source-of-truth standard exists to prevent.
 
 from __future__ import annotations
 
+from importlib import import_module
 from pathlib import Path
+from typing import TYPE_CHECKING
 
-from dotmac_template_studio import service
-from dotmac_template_studio.contexts import (
-    RenderContext,
-    register_contexts,
-    registered_contexts,
-)
-from dotmac_template_studio.manifest import module
-from dotmac_template_studio.seeding import (
-    SeedOutcome,
-    TemplateSeed,
-    seed_templates,
-)
-from dotmac_template_studio.web import template_dir
+if TYPE_CHECKING:
+    from dotmac_template_studio import service
+    from dotmac_template_studio.contexts import (
+        RenderContext,
+        register_contexts,
+        registered_contexts,
+    )
+    from dotmac_template_studio.manifest import module
+    from dotmac_template_studio.seeding import (
+        SeedOutcome,
+        TemplateSeed,
+        seed_templates,
+    )
+    from dotmac_template_studio.web import template_dir
 
 _PKG_DIR = Path(__file__).resolve().parent
 
@@ -66,8 +71,8 @@ _PKG_DIR = Path(__file__).resolve().parent
 # `kind` is gone, `channel` and `context` are required, and the render route
 # moved. Pre-1.0 a `0.MINOR` bump is how this package signals that (CHANGELOG).
 # a3 replaces a foreign revision edge with the logical prerequisite contract;
-# a4 adopts the versioned browser-surface contract.
-__version__ = "0.2.0a4"
+# a5 adds lossless composition of rendered email parts.
+__version__ = "0.2.0a5"
 
 
 def migrations_dir() -> Path:
@@ -78,6 +83,33 @@ def migrations_dir() -> Path:
     ships in the kernel). Resolved by package path so it works installed.
     """
     return _PKG_DIR / "migrations" / "versions"
+
+
+_LAZY_EXPORTS = {
+    "RenderContext": ("contexts", "RenderContext"),
+    "register_contexts": ("contexts", "register_contexts"),
+    "registered_contexts": ("contexts", "registered_contexts"),
+    "SeedOutcome": ("seeding", "SeedOutcome"),
+    "TemplateSeed": ("seeding", "TemplateSeed"),
+    "seed_templates": ("seeding", "seed_templates"),
+    "module": ("manifest", "module"),
+    "template_dir": ("web", "template_dir"),
+}
+
+
+def __getattr__(name: str) -> object:
+    """Keep the public surface while allowing pure submodules to import alone."""
+    if name == "service":
+        return import_module(".service", __name__)
+    export = _LAZY_EXPORTS.get(name)
+    if export is None:
+        raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+    module_name, attribute = export
+    return getattr(import_module(f".{module_name}", __name__), attribute)
+
+
+def __dir__() -> list[str]:
+    return sorted(set(globals()) | set(__all__))
 
 
 __all__ = [

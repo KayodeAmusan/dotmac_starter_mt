@@ -36,7 +36,14 @@ evaluates, on purpose. The 2026-08-10 source audit
 - **Rendering** substitutes `{variable}` placeholders in the PUBLISHED revision.
   Deliberately **not** a Jinja environment: a tenant-authored body is untrusted
   input, and handing it to a template engine would give an operator arbitrary
-  expression evaluation inside the server process.
+  expression evaluation inside the server process. Products that only need
+  substitution can import `dotmac_template_studio.rendering.render` without
+  assembling Template Studio's web surface or database models.
+- **Email composition** joins already-rendered bodies in caller-declared order
+  and uses the caller-named primary part's rendered subject. `service.compose_email`
+  returns the exact ordered parts as provenance. The product still decides which
+  events belong together, whether and when to send, and which channels to use.
+  Full templates may repeat greetings; composition does not rewrite copy.
 
 ## The placeholder contract (ported, not invented)
 
@@ -95,7 +102,8 @@ enforceable across repositories rather than a convention each product re-states.
 ## Its public surface
 
 `module`, `RenderContext`, `register_contexts()`, `registered_contexts()`,
-`service`, `template_dir()`, `migrations_dir()`, `__version__`.
+`service` (including `RenderedEmailPart`, `ComposedEmail`, `compose_email`),
+`template_dir()`, `migrations_dir()`, `__version__`.
 
 Do **not** import `dotmac_template_studio.models` and query it. The tables are an
 implementation detail behind `service`; reaching past it re-creates the

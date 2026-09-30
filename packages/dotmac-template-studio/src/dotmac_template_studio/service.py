@@ -58,14 +58,24 @@ from dotmac_kernel.flag_models import resolve_flag
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
+from dotmac_template_studio.composition import (
+    ComposedEmail as ComposedEmail,
+)
+from dotmac_template_studio.composition import (
+    RenderedEmailPart as RenderedEmailPart,
+)
+from dotmac_template_studio.composition import (
+    compose_email as compose_email,
+)
 from dotmac_template_studio.contexts import RenderContext, get_context
 from dotmac_template_studio.models import Template, TemplateVersion
-
-# Single-brace `{name}` / `{ name }` — the one syntax this module renders, and
-# the one the ported Sub contract defines. The negative lookarounds keep a
-# `{{name}}` token from matching as if it were a single-brace placeholder, so
-# rule 1 below can report it as the distinct problem it is.
-_PLACEHOLDER = re.compile(r"(?<!\{)\{\s*([a-z][a-z0-9_]*)\s*\}(?!\})")
+from dotmac_template_studio.rendering import (
+    _PLACEHOLDER,
+    MissingTemplateValueError,
+)
+from dotmac_template_studio.rendering import (
+    render as _render,
+)
 
 # Double-brace tokens, for save-time REJECTION only. Never rendered.
 _DOUBLE_BRACE = re.compile(r"\{\{\s*([a-zA-Z0-9_]+)\s*\}\}")
@@ -129,32 +139,11 @@ def validate_template_text(
 
 
 def render(body: str, values: dict[str, str], *, strict: bool = True) -> str:
-    """Substitute `{name}` placeholders with `values`.
-
-    `strict` (the default) raises on a placeholder with no supplied value, so a
-    half-substituted message is never produced. A caller that genuinely wants
-    best-effort output — a preview screen — passes `strict=False` and gets the
-    raw placeholder left in place, which is what Sub's preview path does.
-
-    Note the division of labour with the live send path: Sub SUPPRESSES a message
-    whose placeholders did not all resolve. This module does not send, so the
-    equivalent is raising: the caller never receives a half-rendered body it
-    might go on to deliver.
-    """
-    missing: list[str] = []
-
-    def _sub(match: re.Match[str]) -> str:
-        name = match.group(1)
-        if name in values:
-            return values[name]
-        missing.append(name)
-        return match.group(0)
-
-    rendered = _PLACEHOLDER.sub(_sub, body)
-    if strict and missing:
-        names = ", ".join(sorted(set(missing)))
-        raise BadRequestError(f"missing value(s) for template variable(s): {names}")
-    return rendered
+    """Render through the pure seam, preserving the service's API error type."""
+    try:
+        return _render(body, values, strict=strict)
+    except MissingTemplateValueError as exc:
+        raise BadRequestError(str(exc)) from exc
 
 
 # ── Templates ───────────────────────────────────────────────────────────────

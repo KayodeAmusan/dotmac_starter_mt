@@ -1167,7 +1167,9 @@ packages/dotmac-template-studio/ the first optional stateful module (distributio
   pyproject.toml                 dotmac-template-studio; audit-required until
   EXTRACTION.toml                two contract consumers exist — ADR-0006 § 5b)
   src/dotmac_template_studio/    module manifest, service, API/web adapters,
-                 package templates, models, and its own `ts` Alembic lineage
+                 package templates, models, and its own `ts` Alembic lineage;
+                 `rendering` is pure single-brace substitution and `composition`
+                 joins already-rendered email parts without delivery decisions
 packages/dotmac-application-directory/ a tenant's connected-application
   pyproject.toml                 portfolio, and the permanent owner of the
   EXTRACTION.toml                `ApplicationDescriptor` contract (ADR-0021 §4).
