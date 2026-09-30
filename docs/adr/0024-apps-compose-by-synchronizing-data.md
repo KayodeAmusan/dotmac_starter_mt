@@ -690,3 +690,26 @@ it.
 
 **Last-write-wins status synchronization.** It hides ownership conflicts and
 makes ordering or retry determine business state.
+
+## Decision amendment — 2026-09-03 (provider-neutral provisioning contract)
+
+The Integrator SPI gains a fourth closed executable mode, `PROVISION`, at SPI
+1.5. A connector declaring it supplies exactly one handler with typed `plan`,
+`apply`, `observe` and `cancel` operations.
+
+The owning product authors desired state and the complete ordered plan. The
+connector may validate it and execute its steps against an external engine; it
+may not insert, remove, reorder or rewrite steps. Integrator checks the plan
+hash and exact returned step tuple because it is the role that sees both the
+owner-authored command and connector response. A connector result is transport
+evidence, never authoritative product lifecycle state.
+
+This amendment authorizes the contract surface only. Durable provisioning
+operations, leasing, retries, reconciliation, migrations, assembly bindings and
+runtime activation require later changes owned by their existing authorities.
+The first slice therefore ships a provider-free conformance handler and a
+persistence-free invocation boundary. It changes no product, deployment or
+Platform Control Plane path.
+
+Source comparison and the reasons the archived stateful engine was not reused
+are recorded in `docs/inventories/integration-provisioning-sources.md`.

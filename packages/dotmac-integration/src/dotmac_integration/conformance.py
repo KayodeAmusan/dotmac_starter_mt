@@ -58,6 +58,14 @@ from dotmac_integration.spi import (
     IngressRequest,
     ModeContractError,
     PollHandler,
+    ProvisionApplyRequest,
+    ProvisionCancelRequest,
+    ProvisioningHandler,
+    ProvisioningResult,
+    ProvisionObserveRequest,
+    ProvisionPlanRequest,
+    ProvisionPlanResult,
+    ProvisionResultStatus,
     SpiRange,
     verify_plugin_modes,
 )
@@ -189,7 +197,7 @@ class FakePlugin:
     without a provider, and a kit that needed credentials would make every
     author's first encounter with the SPI a secrets problem.
 
-    It declares and implements **all three modes**, so the kit's default fake
+    It declares and implements **all four modes**, so the kit's default fake
     exercises the whole frozen mode registry. A mode with no fake behind it is a
     mode whose contract nothing ever runs — which is how `POLL` spent SPI 1.0 as
     a label. Negative cases get their own vehicle rather than a hole in the
@@ -290,6 +298,26 @@ class FakePlugin:
     #: pair, proving the engine validates the whole return shape before write.
     poll_contract_broken: bool = False
 
+    # ── provision ──────────────────────────────────────────────────────────
+    #: Every typed provisioning request in call order. One list makes it easy
+    #: to prove the fake exercised the entire handler without a provider.
+    provision_requests_seen: list[
+        ProvisionPlanRequest
+        | ProvisionApplyRequest
+        | ProvisionObserveRequest
+        | ProvisionCancelRequest
+    ] = field(default_factory=list)
+    #: A provider-neutral result knob; it contains no credential material and
+    #: makes pending/retry/terminal paths exercisable by later engine tests.
+    provisioning_result: ProvisioningResult = field(
+        default_factory=lambda: ProvisioningResult(
+            status=ProvisionResultStatus.SUCCEEDED
+        )
+    )
+    provision_plan_result: ProvisionPlanResult | None = None
+    provision_raises: BaseException | None = None
+    provision_contract_broken: bool = False
+
     # ── wrong-shape knobs: the sensitivity proofs for the handler check ──────
     #: Hand back the INGRESS handler from the DELIVERY factory. Not callable, so
     #: it is precisely "the wrong callable" the shape check exists to catch, and
@@ -302,6 +330,7 @@ class FakePlugin:
     ingress_handler_wrong_shape: bool = False
     #: The same for POLL.
     poll_handler_wrong_shape: bool = False
+    provision_handler_wrong_shape: bool = False
 
     @property
     def manifest(self) -> ConnectorManifest:
@@ -366,6 +395,52 @@ class FakePlugin:
                 return fake.inbound, fake.next_cursor
 
         return _Poll()
+
+    def provisioning_handler_for(self, capability_id: str) -> ProvisioningHandler:
+        """A four-operation handler that performs no network or persistence I/O."""
+        self.manifest_.require_declares(capability_id)
+        if self.provision_handler_wrong_shape:
+            return lambda request: None  # type: ignore[return-value]
+        fake = self
+
+        class _Provisioning:
+            def _record(
+                self,
+                request: ProvisionPlanRequest
+                | ProvisionApplyRequest
+                | ProvisionObserveRequest
+                | ProvisionCancelRequest,
+            ) -> None:
+                fake.provision_requests_seen.append(request)
+                if fake.provision_raises is not None:
+                    raise fake.provision_raises
+
+            def plan(self, request: ProvisionPlanRequest) -> ProvisionPlanResult:
+                self._record(request)
+                if fake.provision_contract_broken:
+                    return "not a plan result"  # type: ignore[return-value]
+                if fake.provision_plan_result is not None:
+                    return fake.provision_plan_result
+                return ProvisionPlanResult(
+                    plan_hash=request.plan_hash,
+                    steps=request.steps,
+                )
+
+            def apply(self, request: ProvisionApplyRequest) -> ProvisioningResult:
+                self._record(request)
+                if fake.provision_contract_broken:
+                    return "not a provisioning result"  # type: ignore[return-value]
+                return fake.provisioning_result
+
+            def observe(self, request: ProvisionObserveRequest) -> ProvisioningResult:
+                self._record(request)
+                return fake.provisioning_result
+
+            def cancel(self, request: ProvisionCancelRequest) -> ProvisioningResult:
+                self._record(request)
+                return fake.provisioning_result
+
+        return _Provisioning()
 
     def _ingress_handler(self) -> IngressHandler:
         fake = self
@@ -464,7 +539,7 @@ class _StaticEntryPoint:
 class _ManifestPlugin:
     """Mode-exact executable stand-in for manifest-only conformance.
 
-    ``FakePlugin`` intentionally implements all three executable protocols. A
+    ``FakePlugin`` intentionally implements all four executable protocols. A
     manifest-only check must not therefore reuse it for an SPI 1.4 manifest
     that maps only a subset: two-way mode conformance would correctly report
     the fake's extra factories, not a defect in the manifest under test.

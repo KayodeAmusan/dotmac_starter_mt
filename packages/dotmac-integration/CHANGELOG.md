@@ -88,12 +88,25 @@ Nothing in this file is a publication claim except this section.
 
 ## 0.1.0a18 — unreleased
 
-Allocation only — no source change. a17 is published (tag
-`dotmac-integration-v0.1.0a17`), and the durable provisioning-runtime work
-that motivates a18 has not landed yet: allocating the version number ahead of
-that source divergence is what keeps the published-version guard honest the
-moment it does. See `docs/inventories/declared-publication-baseline.json` for
-the recorded declared-unpublished state.
+a17 is published (tag `dotmac-integration-v0.1.0a17`); a18 was allocated
+ahead of source so the durable provisioning-runtime work could not share a
+version number with a17's published contract. That work has now landed:
+
+- Adds **SPI 1.5**: a fourth closed `ConnectorMode`, `PROVISION`, with one
+  `ProvisioningHandler` implementing `plan` / `apply` / `observe` / `cancel`.
+- `provision_plan_hash` is the canonical plan identity; `plan_provisioning`
+  raises `ProvisionPlanRewritten` on any step drift — a connector may
+  validate a plan, never rewrite it.
+- `ProvisionResultStatus` is closed: `SUCCEEDED` is not "provisioned",
+  `ACCEPTED`/`PENDING` means the provider took the command and the caller
+  must observe, and a `NOT_FOUND` from `cancel` does not establish whether an
+  effect never existed or was already removed.
+- Carries no execution owner: no table, no lease, no retry, no idempotency
+  claim, and no `a18` persistence migration. The durable runtime that makes
+  these calls survivable is a separate, later change.
+
+Still unreleased. See `docs/inventories/declared-publication-baseline.json`
+for the recorded declared-unpublished state.
 
 ## 0.1.0a17 — 2026-08-27 — RELEASED
 

@@ -94,12 +94,25 @@ every factory for every capability, forcing a mode-specific factory to lie or
 fail discovery. ``CapabilityDeclaration.modes`` is the exact mapping. ``None``
 retains the legacy all-plugin-modes meaning, so existing connectors remain
 compatible; an explicit mapping is covered by the manifest digest.
+
+## SPI 1.5 adds provider-neutral provisioning operations
+
+``PROVISION`` is a fourth executable mode with one handler exposing four typed
+operations: ``plan``, ``apply``, ``observe`` and ``cancel``. The owning product
+authors desired state and the exact plan; the connector may validate and carry
+that plan to an external engine, but cannot rewrite it. Configuration and
+materialized secrets cross only inside repr-hidden immutable request values.
+
+This is an additive SPI contract, not a durable provisioning engine. The
+Integrator's persistence, leasing, retry and reconciliation owner will bind it
+in a later stateful slice after the next migration revision is allocated.
 """
 
 from __future__ import annotations
 
 import hashlib
 import json
+import math
 import re
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass, field
@@ -135,6 +148,17 @@ __all__ = [
     "ModeNotDeclaredError",
     "PollHandler",
     "PollPlugin",
+    "ProvisionContractError",
+    "ProvisionApplyRequest",
+    "ProvisionCancelRequest",
+    "ProvisionObserveRequest",
+    "ProvisionPlanRequest",
+    "ProvisionPlanResult",
+    "ProvisionPlugin",
+    "ProvisionResultStatus",
+    "ProvisionStep",
+    "ProvisioningHandler",
+    "ProvisioningResult",
     "SecretBindingDeclaration",
     "SpiIncompatibleError",
     "SpiRange",
@@ -216,6 +240,10 @@ class ModeNotDeclaredError(RuntimeError):
     """
 
 
+class ProvisionContractError(ValueError):
+    """A provisioning request or result violates the provider-neutral SPI."""
+
+
 _KEY_RE: Final[re.Pattern[str]] = re.compile(r"^[a-z][a-z0-9_]{1,118}$")
 _DIAGNOSTIC_CODE_RE: Final[re.Pattern[str]] = re.compile(r"^[a-z][a-z0-9_]{0,63}$")
 #: `domain.noun.vN` — e.g. `ticket.observation.v1`. A capability id is a
@@ -294,7 +322,7 @@ class SpiVersion:
 # in order to protect a compatibility promise nothing ever consumed. SPI 1.2
 # then added verification evidence without changing the handler protocols. SPI
 # 1.3 adds deployment declarations while keeping every handler protocol intact.
-CURRENT_SPI_VERSION: Final[SpiVersion] = SpiVersion(1, 4)
+CURRENT_SPI_VERSION: Final[SpiVersion] = SpiVersion(1, 5)
 
 
 @dataclass(frozen=True, slots=True)
@@ -343,12 +371,14 @@ class ConnectorMode(str, Enum):
     """How a connector moves data — a CLOSED union, deliberately.
 
     Each member obliges the engine to supply machinery a plugin cannot bring:
-    a dispatch worker, ingress route, or scheduler/checkpoint loop.
+    a dispatch worker, ingress route, scheduler/checkpoint loop, or durable
+    provisioning/reconciliation loop.
     """
 
     INGRESS = "ingress"
     POLL = "poll"
     DELIVERY = "delivery"
+    PROVISION = "provision"
 
 
 @dataclass(frozen=True, slots=True)
@@ -669,6 +699,270 @@ class DispatchRequest:
     idempotency_key: str
 
 
+@dataclass(frozen=True, slots=True, repr=False)
+class ProvisionStep:
+    """One operation in a plan authored outside the connector.
+
+    ``endpoint_code`` selects connector code; it is not an executable command.
+    The absence of a shell, argv or callable field is deliberate: a product
+    supplies desired operations, never transport implementation.
+    ``input`` contains only finite JSON values with string mapping keys so its
+    canonical identity cannot depend on a mutable object's string rendering.
+    """
+
+    step_key: str
+    endpoint_code: str
+    depends_on: tuple[str, ...] = ()
+    input: Mapping[str, object] = _NO_MATERIAL
+
+    def __post_init__(self) -> None:
+        _require_plan_step_fields(self)
+        if not self.step_key or not self.endpoint_code:
+            raise ProvisionContractError(
+                "a provision step requires non-empty step_key and endpoint_code"
+            )
+        if len(set(self.depends_on)) != len(self.depends_on):
+            raise ProvisionContractError(
+                f"provision step {self.step_key!r} repeats a dependency"
+            )
+        if self.step_key in self.depends_on:
+            raise ProvisionContractError(
+                f"provision step {self.step_key!r} cannot depend on itself"
+            )
+        if not isinstance(self.input, Mapping):
+            raise ProvisionContractError("provision step input requires a mapping")
+        object.__setattr__(self, "depends_on", tuple(self.depends_on))
+        object.__setattr__(self, "input", _freeze_plan_value(self.input))
+
+
+def _require_plan_step_fields(step: ProvisionStep) -> None:
+    if (
+        type(step.step_key) is not str
+        or type(step.endpoint_code) is not str
+        or any(type(dependency) is not str for dependency in step.depends_on)
+    ):
+        raise ProvisionContractError(
+            "provision step identifiers and dependencies must be strings"
+        )
+
+
+def _require_plan_keys(value: Mapping[object, object]) -> None:
+    if any(type(key) is not str for key in value):
+        raise ProvisionContractError(
+            "provision step input requires string mapping keys"
+        )
+
+
+def _require_plan_scalar(value: object) -> object:
+    if type(value) is float and not math.isfinite(value):
+        raise ProvisionContractError("provision step input requires finite JSON values")
+    if type(value) in (str, int, float, bool, type(None)):
+        return value
+    raise ProvisionContractError("provision step input requires finite JSON values")
+
+
+def _freeze_plan_value(value: object) -> object:
+    """Detach finite JSON plan input from its caller and freeze containers."""
+    if isinstance(value, Mapping):
+        _require_plan_keys(value)
+        return MappingProxyType(
+            {key: _freeze_plan_value(item) for key, item in value.items()}
+        )
+    if isinstance(value, list | tuple):
+        return tuple(_freeze_plan_value(item) for item in value)
+    return _require_plan_scalar(value)
+
+
+def _plain_plan_value(value: object) -> object:
+    """Restore JSON containers for the existing canonical digest rule."""
+    if isinstance(value, Mapping):
+        _require_plan_keys(value)
+        return {key: _plain_plan_value(item) for key, item in value.items()}
+    if isinstance(value, list | tuple):
+        return [_plain_plan_value(item) for item in value]
+    return _require_plan_scalar(value)
+
+
+def _provision_steps_digest(steps: Iterable[ProvisionStep]) -> str:
+    steps = tuple(steps)
+    for step in steps:
+        if not isinstance(step, ProvisionStep):
+            raise ProvisionContractError("provision plan requires ProvisionStep values")
+        _require_plan_step_fields(step)
+    if any(not isinstance(step.input, Mapping) for step in steps):
+        raise ProvisionContractError("provision step input requires a mapping")
+    return canonical_digest(
+        [
+            {
+                "step_key": step.step_key,
+                "endpoint_code": step.endpoint_code,
+                "depends_on": list(step.depends_on),
+                "input": _plain_plan_value(step.input),
+            }
+            for step in steps
+        ]
+    )
+
+
+def _freeze_provision_material(instance: object, *names: str) -> None:
+    """Copy and freeze each mapping held by a provisioning envelope."""
+    for name in names:
+        object.__setattr__(
+            instance,
+            name,
+            MappingProxyType(dict(getattr(instance, name))),
+        )
+
+
+def _require_plan_hash(plan_hash: str) -> None:
+    if not _CONTRACT_DIGEST_RE.fullmatch(plan_hash):
+        raise ProvisionContractError(
+            "plan_hash must be 64 lowercase hexadecimal characters"
+        )
+
+
+@dataclass(frozen=True, slots=True, repr=False)
+class ProvisionPlanRequest:
+    """Ask a connector to validate an owner-authored plan without rewriting it."""
+
+    capability_id: str
+    command_id: str
+    plan_hash: str
+    steps: tuple[ProvisionStep, ...]
+    config: Mapping[str, object] = _NO_MATERIAL
+    secrets: Mapping[str, object] = _NO_MATERIAL
+    _original_plan_hash: str = field(init=False, repr=False, compare=False)
+
+    def __post_init__(self) -> None:
+        _require_plan_hash(self.plan_hash)
+        object.__setattr__(self, "steps", tuple(self.steps))
+        seen: set[str] = set()
+        for step in self.steps:
+            if step.step_key in seen:
+                raise ProvisionContractError(
+                    f"provision plan repeats step_key {step.step_key!r}"
+                )
+            missing = set(step.depends_on) - seen
+            if missing:
+                raise ProvisionContractError(
+                    f"provision step {step.step_key!r} depends on steps that do "
+                    f"not precede it: {sorted(missing)}"
+                )
+            seen.add(step.step_key)
+        _freeze_provision_material(self, "config", "secrets")
+        object.__setattr__(
+            self, "_original_plan_hash", _provision_steps_digest(self.steps)
+        )
+
+
+@dataclass(frozen=True, slots=True, repr=False)
+class ProvisionPlanResult:
+    """The connector's acceptance of the exact plan plus transport evidence."""
+
+    plan_hash: str
+    steps: tuple[ProvisionStep, ...]
+    evidence: Mapping[str, object] = _NO_MATERIAL
+
+    def __post_init__(self) -> None:
+        _require_plan_hash(self.plan_hash)
+        object.__setattr__(self, "steps", tuple(self.steps))
+        _freeze_provision_material(self, "evidence")
+
+
+@dataclass(frozen=True, slots=True, repr=False)
+class ProvisionApplyRequest:
+    """Apply one already-approved step; never a whole unbounded plan."""
+
+    capability_id: str
+    command_id: str
+    operation_ref: str
+    plan_hash: str
+    step: ProvisionStep
+    config: Mapping[str, object]
+    secrets: Mapping[str, object]
+    idempotency_key: str
+
+    def __post_init__(self) -> None:
+        _require_plan_hash(self.plan_hash)
+        _freeze_provision_material(self, "config", "secrets")
+
+
+@dataclass(frozen=True, slots=True, repr=False)
+class ProvisionObserveRequest:
+    """Observe one provider operation without deciding its business meaning."""
+
+    capability_id: str
+    command_id: str
+    operation_ref: str
+    plan_hash: str
+    step_key: str
+    provider_operation_ref: str
+    target: Mapping[str, object]
+    config: Mapping[str, object]
+    secrets: Mapping[str, object]
+
+    def __post_init__(self) -> None:
+        _require_plan_hash(self.plan_hash)
+        _freeze_provision_material(self, "target", "config", "secrets")
+
+
+@dataclass(frozen=True, slots=True, repr=False)
+class ProvisionCancelRequest:
+    """Request cancellation; only the owning product decides to issue it."""
+
+    capability_id: str
+    command_id: str
+    operation_ref: str
+    plan_hash: str
+    step_key: str
+    provider_operation_ref: str
+    target: Mapping[str, object]
+    reason: str
+    idempotency_key: str
+    config: Mapping[str, object]
+    secrets: Mapping[str, object]
+
+    def __post_init__(self) -> None:
+        _require_plan_hash(self.plan_hash)
+        _freeze_provision_material(self, "target", "config", "secrets")
+
+
+class ProvisionResultStatus(str, Enum):
+    """Closed transport outcomes; the product still owns lifecycle state."""
+
+    SUCCEEDED = "succeeded"
+    ACCEPTED = "accepted"
+    PENDING = "pending"
+    RETRYABLE = "retryable"
+    TERMINAL = "terminal"
+    AMBIGUOUS = "ambiguous"
+    CANCELLED = "cancelled"
+    NOT_FOUND = "not_found"
+
+
+@dataclass(frozen=True, slots=True, repr=False)
+class ProvisioningResult:
+    """Provider-neutral execution evidence, never a business decision."""
+
+    status: ProvisionResultStatus
+    provider_operation_ref: str | None = None
+    evidence: Mapping[str, object] = _NO_MATERIAL
+    error_code: str | None = None
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.status, ProvisionResultStatus):
+            raise ProvisionContractError(
+                "a provisioning result status must be a ProvisionResultStatus"
+            )
+        if self.error_code is not None and not _DIAGNOSTIC_CODE_RE.fullmatch(
+            self.error_code
+        ):
+            raise ProvisionContractError(
+                "a provisioning result error_code must be a stable machine code"
+            )
+        _freeze_provision_material(self, "evidence")
+
+
 class InboundDisposition(str, Enum):
     """Whether a verified provider fact is eligible for product delivery.
 
@@ -967,6 +1261,19 @@ class PollHandler(Protocol):
 
 
 @runtime_checkable
+class ProvisioningHandler(Protocol):
+    """MODE: PROVISION — plan/apply/observe/cancel at the transport seam."""
+
+    def plan(self, request: ProvisionPlanRequest) -> ProvisionPlanResult: ...
+
+    def apply(self, request: ProvisionApplyRequest) -> ProvisioningResult: ...
+
+    def observe(self, request: ProvisionObserveRequest) -> ProvisioningResult: ...
+
+    def cancel(self, request: ProvisionCancelRequest) -> ProvisioningResult: ...
+
+
+@runtime_checkable
 class ConnectorPlugin(Protocol):
     """The BASE contract: identity, metadata, and connection validation.
 
@@ -1028,6 +1335,13 @@ class PollPlugin(ConnectorPlugin, Protocol):
     def poll_handler_for(self, capability_id: str) -> PollHandler: ...
 
 
+@runtime_checkable
+class ProvisionPlugin(ConnectorPlugin, Protocol):
+    """MODE: PROVISION. Executes an approved plan through typed operations."""
+
+    def provisioning_handler_for(self, capability_id: str) -> ProvisioningHandler: ...
+
+
 @dataclass(frozen=True, slots=True)
 class ModeContract:
     """What a declared mode obliges a plugin to provide.
@@ -1070,6 +1384,11 @@ MODE_PROTOCOLS: Final[Mapping[ConnectorMode, ModeContract]] = MappingProxyType(
             plugin_protocol=PollPlugin,
             factory="poll_handler_for",
             handler_protocol=PollHandler,
+        ),
+        ConnectorMode.PROVISION: ModeContract(
+            plugin_protocol=ProvisionPlugin,
+            factory="provisioning_handler_for",
+            handler_protocol=ProvisioningHandler,
         ),
     }
 )

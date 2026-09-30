@@ -9,7 +9,7 @@ document is the bug.
 | | |
 |---|---|
 | Released | `0.1.0a1` through **`0.1.0a17`**; a2–a4 implement **SPI 1.1**, a5–a9 implement **SPI 1.2**, a10 implements **SPI 1.3**, a11 adds executable polling, a12 adds capability-wide product-port reconciliation, a13 adds ProductObservation v1 projection, a14 adds additive **SPI 1.4** capability modes plus outbound evidence/retention, a15 adds typed outbound repair and runtime safety, and a16 adds the domain-owned payload gate plus durable polling evidence, and a17 adds product-port descriptor v3, carrying the domain's payload contract or dated grace separately from the product wire without changing SPI 1.4 |
-| Declared | `0.1.0a18` is allocated ahead of source, so that the durable provisioning-runtime work cannot share a version number with a17's published contract. It adds no capability yet and nothing may exact-pin it until the protected release tags exact `0.1.0a18` |
+| Declared, unpublished | `0.1.0a18` contains additive **SPI 1.5** source — the `PROVISION` mode and its `plan`/`apply`/`observe`/`cancel` contract — with no persistence migration. It is not a release, and nothing may exact-pin it until the protected release tags exact `0.1.0a18` |
 
 SPI 1.2 is additive. It accepts the same closed `>=1.0,<2.0` ranges and adapts
 SPI 1.1's boolean ingress-verification result to the evidence-free form of the
@@ -28,6 +28,12 @@ When present, the mapping is exact, included in the manifest digest and checked
 at discovery and invocation. This lets one plugin expose an ingress-only
 receive capability and a delivery-only send capability without either factory
 lying about the other.
+
+SPI 1.5 adds the `PROVISION` mode and one handler with typed `plan`, `apply`,
+`observe` and `cancel` operations. It does not move payload ownership into the
+connector: the product still owns the capability contract and exact plan, and
+the connector still claims only that contract's digest. The Integrator refuses
+a rewritten plan before any later persistence layer could accept it.
 
 The `InboundEvent.disposition` field declared for a7 defaults to `deliver`.
 Existing connectors therefore keep their behaviour; connectors may explicitly
@@ -73,7 +79,7 @@ that boundary.
 
 ### One protocol per mode
 
-`ConnectorMode` is a **closed** union of three members. Each adds exactly one
+`ConnectorMode` is a **closed** union of four members. Each adds exactly one
 factory:
 
 | Mode | Plugin protocol | Factory | Returns |
@@ -81,6 +87,7 @@ factory:
 | `DELIVERY` | `DeliveryPlugin` | `handler_for` | `CapabilityHandler` |
 | `INGRESS` | `IngressPlugin` | `ingress_handler_for` | `IngressHandler` |
 | `POLL` | `PollPlugin` | `poll_handler_for` | `PollHandler` |
+| `PROVISION` | `ProvisionPlugin` | `provisioning_handler_for` | `ProvisioningHandler` |
 
 That table is `MODE_PROTOCOLS`, a read-only mapping asserted exhaustive at
 import. A mode cannot be added without deciding what makes it runnable — the
@@ -128,7 +135,9 @@ a stated refusal naming the connector and what it *does* declare.
 The POLL mode is executed by `prepare_poll` -> `invoke_poll` ->
 `record_poll_batch`. Provider I/O runs after the prepare unit of work has closed;
 the normalized batch and next cursor then commit together. This is package
-machinery rather than a new SPI shape, so `CURRENT_SPI_VERSION` remains 1.3.
+machinery rather than a new SPI shape in a11. The source in declared,
+unpublished a18 now sets `CURRENT_SPI_VERSION` to 1.5 for the additive
+capability-mode and provisioning contracts; a17 remains the latest release.
 
 ## The ingress contract
 

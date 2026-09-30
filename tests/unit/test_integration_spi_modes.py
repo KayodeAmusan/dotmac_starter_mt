@@ -24,6 +24,9 @@ SPI 1.4 maps each capability to its executable modes. Omission preserves the
 legacy all-plugin-modes meaning; an explicit map stops conformance from calling
 an ingress factory for a delivery-only capability or the reverse.
 
+SPI 1.5 adds the fourth executable mode, provider-neutral provisioning, as the
+typed plan/apply/observe/cancel seam.
+
 Every guard below is paired with a case that makes it FIRE. A test that only
 shows a guard accepting a good connector proves nothing about what it refuses,
 and the empty-set trap is real here: three of these checks would pass vacuously
@@ -70,6 +73,8 @@ from dotmac_integration.spi import (
     ModeNotDeclaredError,
     PollHandler,
     PollPlugin,
+    ProvisioningHandler,
+    ProvisionPlugin,
     SpiIncompatibleError,
     SpiRange,
     SpiVersion,
@@ -103,6 +108,12 @@ def test_the_base_protocol_carries_no_data_movement() -> None:
         (ConnectorMode.DELIVERY, DeliveryPlugin, "handler_for", CapabilityHandler),
         (ConnectorMode.INGRESS, IngressPlugin, "ingress_handler_for", IngressHandler),
         (ConnectorMode.POLL, PollPlugin, "poll_handler_for", PollHandler),
+        (
+            ConnectorMode.PROVISION,
+            ProvisionPlugin,
+            "provisioning_handler_for",
+            ProvisioningHandler,
+        ),
     ],
 )
 def test_each_mode_has_exactly_one_executable_protocol(
@@ -203,6 +214,7 @@ def test_the_exhaustiveness_guard_bites() -> None:
         DELIVERY = "delivery"
         INGRESS = "ingress"
         POLL = "poll"
+        PROVISION = "provision"
         TELEPATHY = "telepathy"
 
     missing = _modes_without_contracts(_Grown, MODE_PROTOCOLS)
@@ -312,7 +324,7 @@ def test_an_implemented_mode_must_be_declared() -> None:
 
 def test_a_plugin_declaring_what_it_implements_conforms() -> None:
     """The positive case, so the two rules above cannot pass by rejecting
-    everything — and it covers all three modes, so no mode's contract goes
+    everything — and it covers all four modes, so no mode's contract goes
     unrun."""
     plugin = fake_plugin()
     assert_plugin_conforms(plugin)
@@ -320,6 +332,7 @@ def test_a_plugin_declaring_what_it_implements_conforms() -> None:
     assert isinstance(plugin, DeliveryPlugin)
     assert isinstance(plugin, IngressPlugin)
     assert isinstance(plugin, PollPlugin)
+    assert isinstance(plugin, ProvisionPlugin)
     assert fake_registry(plugins=[plugin]).keys == {"conformance_fake"}
 
 
@@ -912,7 +925,11 @@ def test_the_1_0_connector_is_refused_for_a_mode_it_never_declared() -> None:
     check is inert."""
     connector = _Spi10DeliveryConnector()
     require_mode(connector, ConnectorMode.DELIVERY)
-    for mode in (ConnectorMode.INGRESS, ConnectorMode.POLL):
+    for mode in (
+        ConnectorMode.INGRESS,
+        ConnectorMode.POLL,
+        ConnectorMode.PROVISION,
+    ):
         with pytest.raises(ModeNotDeclaredError, match="legacy_delivery"):
             require_mode(connector, mode)
 
@@ -926,7 +943,7 @@ def test_the_spi_range_check_is_live_for_the_fixture() -> None:
     nothing being checked.
     """
     assert SpiRange.parse(">=1.0,<2.0").admits(CURRENT_SPI_VERSION)
-    assert CURRENT_SPI_VERSION == SpiVersion(1, 4)
+    assert CURRENT_SPI_VERSION == SpiVersion(1, 5)
     with pytest.raises(SpiIncompatibleError, match="running module implements"):
         discover(points=[_point(_Spi10DeliveryConnector(spi_range=">=1.0,<1.3"))])
 
