@@ -1,0 +1,100 @@
+schema_version = 1
+package = "dotmac-connector-sub-accounting"
+classification = "stateless-protocol-adapter"
+status = "audit-complete"
+source_mode = "greenfield-after-inventory"
+
+owner = "Sub invoice-accounting-sync feed transport: authenticated (X-API-Key) paged GET polling of Sub's invoices/accounting-sync/v2 feed through an engine-owned cursor, response and per-item shape validation, disposition/issues consistency checking, and translation into the provider-neutral invoices.accounting_sync.observation.v1 POLL observation, including wire-shape validation and verbatim forwarding of Sub's own digest_version/projection_digest fields."
+
+contract = "Implement dotmac-integration SPI >=1.3,<2.0 for connector key sub_accounting. Serve invoices.accounting_sync.observation.v1 in POLL only. Page GET /api/v1/invoices/accounting-sync/v2 on selfcare.dotmac.io with X-API-Key auth, a canonical {after_id, after_updated_at} cursor (both fields or neither), always-sent limit and optional updated_since; validate strictly-increasing (updated_at, source_invoice_id) page positions and refuse a non-monotonic page. Emit only source-derived fields (source_invoice_id, source_account_id, source_updated_at, source_kind, disposition, source_total_amount/currency, optional source_issued_at/source_due_at, issues with line_id renamed to source_line_id, contract_version, digest_version, projection_digest) — never organization_id or an idempotency_key-shaped field, which are the generic Integration engine's and the destination ObservationPortClient's responsibility. digest_version/projection_digest are Sub-computed and forwarded verbatim after wire-shape validation only (positive int; 64-lowercase-hex string) — this connector never computes or reconstructs a digest itself. Refuse a blocked observation with no issues, or a non-blocked observation carrying issues, before emitting. Own no database, product identity, destination-org mapping, delivery idempotency, retry/checkpoint engine or ERP-side consistency enforcement."
+
+# ── Greenfield, not ported — evidence gap closed 2026-09-19 ─────────────────
+#
+# No qualifying implementation of this specific feed's POLL client existed
+# anywhere in the fleet when this package was built; the wire contract (path,
+# headers, cursor params, response and item shape) was first taken from a
+# description gathered in the session that built this connector, with the
+# `dotmac_sub`/`dotmac_erp` citations below originally left UNVERIFIED because
+# neither repository was reachable from that worktree.
+#
+# 2026-09-19: independently re-verified with both repositories checked out.
+# `dotmac_sub@e9a3b1d4da356ee1ed1f901520ff6a9e27bf5163` (origin/main) actually
+# contains `InvoiceAccountingSyncRead`/`InvoiceAccountingSyncDisposition`/
+# `InvoiceAccountingSyncIssueCode` etc. in `app/schemas/billing.py`
+# (`contract_version: Literal["invoice-accounting-sync.v2"]`), and
+# `app/services/auth_dependencies.py` actually implements the API-key
+# hash/verify precedent (`hash_api_key`, `hash_api_key_candidates`,
+# `is_legacy_api_key_hash`) this connector's auth description was built
+# against. `dotmac_erp@016d14a470dd6cb2a017aa43fec12b5f60cf3d2e` (origin/main)
+# actually contains, in `app/services/dotmac_sub/client.py`, a real
+# `X-Api-Key`-headed client with `get_invoice_accounting_sync_v2` /
+# `_parse_invoice_accounting_sync_v2` methods consuming this exact feed, and
+# `app/services/dotmac_sub/invoice_sync_shadow.py` actually records bounded
+# v2 shadow batches. This is a targeted confirmation of the specific claims
+# above (the named classes/functions exist and match the described shapes),
+# not a full line-for-line audit of either file. `source_revisions` and the
+# `[[product_writers]]` rows below now pin exactly the revisions checked.
+# Neither product has, or ever had, its own implementation of THIS capability
+# to retire — hence `writer_state = "inventory_only"` for both, not
+# `legacy_writer`. The previous highest-risk open item — this connector's own
+# best-effort reconstruction of ERP's digest algorithm — remains RESOLVED:
+# Sub itself computes and publishes digest_version/projection_digest on the
+# wire (dotmac_sub's app/services/dotmac_erp/invoice_sync_digest.py), and
+# this connector's only remaining job for those two fields is wire-shape
+# validation and verbatim forwarding, never recomputation.
+
+source_repositories = ["dotmac_starter_mt", "dotmac_erp", "dotmac_sub"]
+
+source_revisions = [
+  "dotmac_erp:016d14a470dd6cb2a017aa43fec12b5f60cf3d2e",
+  "dotmac_sub:e9a3b1d4da356ee1ed1f901520ff6a9e27bf5163",
+]
+
+source_paths = [
+  "dotmac_starter_mt:packages/dotmac-connector-sub-accounting/src/dotmac_connector_sub_accounting/plugin.py",
+  "dotmac_starter_mt:packages/dotmac-connector-sub-accounting/src/dotmac_connector_sub_accounting/polling.py",
+  "dotmac_starter_mt:packages/dotmac-connector-sub-accounting/src/dotmac_connector_sub_accounting/mapping.py",
+  # Confirmed 2026-09-19 against dotmac_sub@e9a3b1d4da356ee1ed1f901520ff6a9e27bf5163
+  # — see the note above.
+  "dotmac_sub:app/schemas/billing.py",
+  "dotmac_sub:app/services/auth_dependencies.py",
+  # Confirmed 2026-09-19 against dotmac_erp@016d14a470dd6cb2a017aa43fec12b5f60cf3d2e
+  # — see the note above.
+  "dotmac_erp:app/services/dotmac_sub/client.py",
+  "dotmac_erp:app/services/dotmac_sub/invoice_sync_shadow.py",
+]
+
+preserved_tests = [
+  "dotmac_starter_mt:packages/dotmac-connector-sub-accounting/tests/test_connector.py",
+  "dotmac_starter_mt:packages/dotmac-connector-sub-accounting/tests/test_mapping.py",
+  "dotmac_starter_mt:packages/dotmac-connector-sub-accounting/tests/test_polling.py",
+]
+
+contract_consumers = []
+candidate_consumers = ["dotmac_integrator", "dotmac_erp"]
+
+inventory_evidence = [
+  "docs/adr/0024-apps-compose-by-synchronizing-data.md",
+]
+
+first_cutover = "ERP publishes invoices.accounting_sync.observation.v1's observation schema in its ProductPort descriptor v3, and this connector claims that contract digest. After cross-repository CI validates the descriptor and wire fixture, separately authorize publication and exact-pinning in an isolated ERP dotmac_integrator instance; reconcile the descriptor and run a POLL shadow cutover against Sub's feed with no ERP-side GL consequence. This dossier does not authorize activation."
+
+shadow_and_drift = "Compare every polled item's mapped fields, disposition/issues consistency verdict and forwarded projection_digest against ERP's own independently-computed shadow record for the same source item, over a full accounting cycle. Because this connector forwards Sub's own digest_version/projection_digest verbatim rather than computing them, a mismatch here now means a real transport or mapping bug — not an expected reconciliation gap — and should be investigated as a runtime bug."
+
+local_copy_retirement = "No qualifying Dotmac client for this feed existed at build time, so there is no local copy to retire. If a product introduces a direct Sub accounting-sync client before this connector's first cutover, remove that provider transport, credential access and poll checkpoint in the adopting change; the product retains only its own accounting decisions and typed Integration port."
+
+next_action = "Run CI for the Sub fixture, connector mapping and claimed ERP contract digest, Integrator descriptor reconciliation and HTTP mirror, and ERP receiver parity/legacy/conflict cases. Keep the port disabled until a separately authorized binding and cutover."
+
+[[product_writers]]
+product = "dotmac_erp"
+writer_state = "inventory_only"
+retirement_required = false
+revision = "016d14a470dd6cb2a017aa43fec12b5f60cf3d2e"
+evidence_paths = ["app/services/dotmac_sub/client.py", "app/services/dotmac_sub/invoice_sync_shadow.py"]
+
+[[product_writers]]
+product = "dotmac_sub"
+writer_state = "inventory_only"
+retirement_required = false
+revision = "e9a3b1d4da356ee1ed1f901520ff6a9e27bf5163"
+evidence_paths = ["app/schemas/billing.py", "app/services/auth_dependencies.py"]

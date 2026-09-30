@@ -465,6 +465,60 @@
         ]
       }
     },
+    "dotmac-connector-sub-accounting": {
+      "$comment": [
+        "Sub's invoices/accounting-sync/v2 feed transport: authenticated",
+        "(X-API-Key) paged GET polling through an engine-owned cursor,",
+        "response and per-item shape validation, disposition/issues",
+        "consistency checking, and translation into the provider-neutral",
+        "invoices.accounting_sync.observation.v1 POLL observation. Wire-shape",
+        "validation and verbatim forwarding of Sub's own digest_version/",
+        "projection_digest fields only — it never computes or reconstructs a",
+        "digest itself, and owns no database, product identity, destination-",
+        "org mapping, delivery idempotency, retry/checkpoint engine or ERP-",
+        "side consistency enforcement.",
+        "",
+        "HELD BACK, deliberately, not a gap: release_enabled is false, so the",
+        "release gate refuses this connector before build and again after",
+        "protected-environment approval. It is composable in the root dev",
+        "environment but is NOT selectable or releasable. ERP's own",
+        "ProductPort descriptor v3 (invoices.accounting_sync.observation.v1)",
+        "that this connector's claims_contract_digest pins against stays",
+        "configured_disabled, no isolated ERP Integrator instance is",
+        "deployed, and no production binding, scope, or activation has been",
+        "authorized. Release once a POLL shadow cutover against Sub's real",
+        "feed has run with no ERP-side GL consequence and separate",
+        "activation authority is granted."
+      ],
+      "package_dir": "packages/dotmac-connector-sub-accounting",
+      "release_enabled": false,
+      "import_name": "dotmac_connector_sub_accounting",
+      "plugin_attr": "PLUGIN",
+      "connector_key": "sub_accounting",
+      "spi_range": ">=1.3,<2.0",
+      "integration_floor": "0.1.0a14",
+      "tag_prefix": "dotmac-connector-sub-accounting-v",
+      "wheel_contents": {
+        "required": [
+          "dotmac_connector_sub_accounting/__init__.py",
+          "dotmac_connector_sub_accounting/mapping.py",
+          "dotmac_connector_sub_accounting/plugin.py",
+          "dotmac_connector_sub_accounting/polling.py",
+          "dotmac_connector_sub_accounting/py.typed"
+        ],
+        "forbidden_prefixes": [
+          "app/",
+          "tests/",
+          "alembic/",
+          "scripts/"
+        ],
+        "allowed_requires": [
+          "dotmac-integration",
+          "httpx",
+          "python"
+        ]
+      }
+    },
     "dotmac-connector-whatsapp": {
       "$comment": [
         "Meta WhatsApp Cloud API translation, authentication and delivery I/O.",

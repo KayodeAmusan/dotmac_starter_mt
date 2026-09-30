@@ -668,6 +668,7 @@ def test_the_allowlist_opens_for_only_the_proven_connector() -> None:
         "dotmac-connector-nira",
         "dotmac-connector-paystack",
         "dotmac-connector-remita",
+        "dotmac-connector-sub-accounting",
         "dotmac-connector-whatsapp",
     }
     gate = _gate()
