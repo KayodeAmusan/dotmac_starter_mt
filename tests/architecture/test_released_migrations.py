@@ -1840,6 +1840,18 @@ RELEASED_TAGS: dict[str, tuple[str, str, dict[str, str]]] = {
         },
     ),
     # ── dotmac-template-studio ──
+    "dotmac-template-studio-v0.2.0a5": (
+        "dotmac-template-studio",
+        "94eca47845b93bd444a859abd6dc688411a5a7ea",
+        {
+            "ts_0001_templates.py": (
+                "511073d3225c8fa9be09c687500e0515efbb5d8fdc4859791e1e4f16ed7308f4"
+            ),
+            "ts_0002_notification_identity.py": (
+                "b50c2387f54a877cf0f0ff772bcfc84083a973595c490d6facf6bf7a8f196088"
+            ),
+        },
+    ),
     "dotmac-template-studio-v0.2.0a4": (
         "dotmac-template-studio",
         "ac5e439e622ec5adba94cf52f4f961f2c39a2d30",
