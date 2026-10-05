@@ -1,7 +1,7 @@
 # TLS reverse proxy for the Forgejo registry. Caddy obtains + renews a
 # Let's Encrypt cert for registry.dotmac.io automatically (ACME HTTP-01 on :80),
 # terminates TLS on :443, and proxies to the forgejo container. DNS
-# (registry.dotmac.io -> 194.163.130.216) must resolve and :80/:443 must be
+# (registry.dotmac.io -> [redacted 2026-10-05: dotmac-s3 address; see Fleet]) must resolve and :80/:443 must be
 # reachable from the internet for issuance.
 
 registry.dotmac.io {

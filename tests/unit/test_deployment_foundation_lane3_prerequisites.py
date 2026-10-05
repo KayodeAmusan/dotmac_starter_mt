@@ -10,7 +10,7 @@ a lease **cannot be self-granted**: it must reference the Platform CP
 authorization run, because a holder who writes its own lease has proved only
 that it can write a file.
 
-**The vantage.** `94.72.99.155` was qualified as "outside every Dotmac
+**The vantage.** `198.51.100.155` was qualified as "outside every Dotmac
 allowlist" on the strength of refusals, then found to hold a second NIC into a
 private network. Re-measured 2026-08-30 that NIC is gone — which removed the
 risk AND removed the discrimination control that depended on it. So
@@ -179,7 +179,7 @@ def _vantage(**overrides) -> VantageQualification:
 
 
 def test_a_clean_single_interface_vantage_qualifies() -> None:
-    """The accepting control — and the shape `94.72.99.155` now has."""
+    """The accepting control — and the shape `198.51.100.155` now has."""
     assert qualify_vantage(_vantage()).qualified
 
 

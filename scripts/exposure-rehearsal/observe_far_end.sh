@@ -24,10 +24,13 @@
 # ## Field ONE, never field four
 #
 # `SSH_CONNECTION` is `<client-ip> <client-port> <server-ip> <server-port>`.
-# Measured 2026-09-04 against the rehearsal target:
+# The shape measured 2026-09-04 against the rehearsal target, with the real
+# addresses replaced by documentation ranges (RFC 5737 / RFC 3849). This is a
+# public repository, and topology does not belong in its source; the measured
+# IPv4 server field was an RFC 1918 address:
 #
-#   IPv4: 94.72.99.155 48292 10.120.120.54 22
-#   IPv6: 2a02:c204:2353:7605::1 36088 2c0f:e888:11::102 22
+#   IPv4: 198.51.100.7 48292 192.0.2.54 22
+#   IPv6: 2001:db8:1::1 36088 2001:db8:2::102 22
 #
 # The CLIENT field is comparable across families and is what this emits. The
 # SERVER field is not: on IPv4 it is the target's PRIVATE address because dstnat

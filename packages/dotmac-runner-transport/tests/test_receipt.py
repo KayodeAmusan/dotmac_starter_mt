@@ -382,12 +382,12 @@ def test_malformed_receipt_coordinates_refuse(field, value, message) -> None:
 def test_no_proxy_and_both_environment_digests_are_load_bearing() -> None:
     original = _bundle()
     changed = _bundle(
-        HostDirectEgressGrantV1("runner-one", "100.64.53.1/32", 8200, "tcp", "wg0")
+        HostDirectEgressGrantV1("runner-one", "100.64.0.1/32", 8200, "tcp", "wg0")
     )
     original_environment = original.runner_environments[0]
     changed_environment = changed.runner_environments[0]
-    assert "NO_PROXY=100.64.53.1" in changed_environment.content
-    assert "NO_PROXY=100.64.53.1" in (changed_environment.workload_content or "")
+    assert "NO_PROXY=100.64.0.1" in changed_environment.content
+    assert "NO_PROXY=100.64.0.1" in (changed_environment.workload_content or "")
 
     documents = _documents()
     receipt = _receipt(original, documents)

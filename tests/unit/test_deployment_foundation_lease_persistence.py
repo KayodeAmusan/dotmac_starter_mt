@@ -73,7 +73,7 @@ PACKAGE = (
 )
 SCRIPTS = Path(__file__).resolve().parents[2] / "scripts"
 
-TARGET = "10.120.120.54"
+TARGET = "192.0.2.54"
 SLOT = "dotmacproxmox/102"
 RUN = "33854964978"
 REHEARSAL = "33860000001"

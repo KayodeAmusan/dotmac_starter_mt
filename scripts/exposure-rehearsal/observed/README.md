@@ -1,14 +1,14 @@
 # Observed bytes from the Lane 3 run, 2026-08-29
 
-Real output from `85.190.246.211` while `scripts/exposure-rehearsal/product.toml`
+Real output from `[redacted 2026-10-05: shared rehearsal host IPv4]` while `scripts/exposure-rehearsal/product.toml`
 was applied, kept as parser and verifier fixtures so the next change is tested
 against measured bytes rather than invented ones.
 
 **The address above is historical and is deliberately not updated.** These are
 recorded bytes: they came from that host, on that date, and rewriting the
 provenance line to name the current Role A
-(`lane3-rehearsal-target`, `160.119.127.202`) would make the file claim a
-measurement nobody took. `85.190.246.211` is no longer an authorized rehearsal
+(`lane3-rehearsal-target`, `[redacted 2026-10-05: rehearsal target public IPv4]`) would make the file claim a
+measurement nobody took. `[redacted 2026-10-05: shared rehearsal host IPv4]` is no longer an authorized rehearsal
 target — see `docs/inventories/deployment-exposure-rehearsal.md` — and nothing
 here should be read as authorizing it. When a run against the new target
 produces bytes, they arrive as new fixtures beside these, not as an edit to

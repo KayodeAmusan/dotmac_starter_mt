@@ -29,7 +29,7 @@ Authority split (phase 1):
 | Credentials & signing material | OpenBao |
 | Vendor/product lifecycle | Vendor control plane |
 
-- **Deployment:** Forgejo runs on **dotmac-s3 (194.163.130.216)** at
+- **Deployment:** Forgejo runs on **dotmac-s3 ([redacted 2026-10-05: dotmac-s3 address; see Fleet])** at
   `https://registry.dotmac.io`, co-located with the existing (idle) MinIO — a
   dedicated registry host, deliberately NOT the production database tier. Package
   **blobs** live in a MinIO bucket (`dotmac-packages`); Forgejo **metadata** in a

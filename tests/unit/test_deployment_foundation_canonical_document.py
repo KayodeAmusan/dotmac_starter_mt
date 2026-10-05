@@ -376,7 +376,7 @@ def test_the_real_document_carries_no_address_literal(
 
 @pytest.mark.parametrize(
     "resolved",
-    ["10.20.0.7", "2a02:c204:2298:8431::1", "10.0.0.0/8", "192.168.1.10"],
+    ["10.20.0.7", "2001:db8:2298:8431::1", "10.0.0.0/8", "192.168.1.10"],
 )
 def test_a_planted_resolved_address_is_refused(
     document: DeploymentDescriptorDocumentV1, resolved: str

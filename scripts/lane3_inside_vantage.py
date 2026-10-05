@@ -26,10 +26,11 @@ assumed, because the vacuous version is the one that arrives by accident.
 
 Michael, 2026-09-04: *"Model inside/outside IPv4 and IPv6 sources
 independently."* The inside vantage's own addresses show why. Measured through
-the jump:
+the jump (shown here in documentation ranges, RFC 5737 / RFC 3849: this is a
+public repository and topology does not belong in its source):
 
-    v4  160.119.127.195                      Dell segment
-    v6  2c0f:e888:12:0:1e98:ecff:fe11:3629   HP-server segment
+    v4  192.0.2.195                          Dell segment
+    v6  2001:db8:12:0:1e98:ecff:fe11:3629    HP-server segment
 
 Its v4 is on the target's segment and its v6 is not. One prefix per vantage
 would therefore be wrong for one of the two families, and a source set declared

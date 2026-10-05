@@ -271,7 +271,7 @@ def test_the_digest_itself_is_checked_not_only_the_text() -> None:
 
 def _lease(**over) -> HostLease:
     kwargs = {
-        "target": "10.120.120.54",
+        "target": "192.0.2.54",
         "holder": "deployment-foundation-rehearsal",
         "authorization_run_id": RUN,
         "starts_at": "2026-09-04T00:00:00Z",

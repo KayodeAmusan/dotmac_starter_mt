@@ -102,11 +102,11 @@ def test_binding_cannot_issue_another_capabilitys_operation() -> None:
 
 def test_host_create_frame_carries_both_address_families() -> None:
     xml = frames.host_create(
-        "ns1.dotmac.ng", addrs=["160.119.127.200", "2c0f:e888:11::51"], cltrid="k"
+        "ns1.dotmac.ng", addrs=["192.0.2.200", "2001:db8:11::51"], cltrid="k"
     )
     assert "<host:name>ns1.dotmac.ng</host:name>" in xml
-    assert '<host:addr ip="v4">160.119.127.200</host:addr>' in xml
-    assert '<host:addr ip="v6">2c0f:e888:11::51</host:addr>' in xml
+    assert '<host:addr ip="v4">192.0.2.200</host:addr>' in xml
+    assert '<host:addr ip="v6">2001:db8:11::51</host:addr>' in xml
 
 
 def test_domain_check_includes_fee_extension_when_currency_given() -> None:
