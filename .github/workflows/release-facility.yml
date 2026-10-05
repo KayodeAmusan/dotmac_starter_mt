@@ -256,8 +256,9 @@ jobs:
       #
       #   * the RELEASE/TAG revision — ${GITHUB_SHA} here, the commit that
       #     publishes;
-      #   * the LANE 3 RUNNER revision — the rehearsal run's own head SHA, which
-      #     `gh run list --commit` selects on and which the receipt records.
+      #   * the LANE 3 RUNNER revision — the Starter commit the organization
+      #     launcher checked out and verified, named in the run's title (which
+      #     the oracle selects on) and recorded in the receipt.
       #     `verify_publication` compares the two, so an old green run on
       #     another commit cannot stand in;
       #   * the CANDIDATE SOURCE revision — the commit the artifact was BUILT
@@ -280,22 +281,23 @@ jobs:
         id: rehearsal
         env:
           GITHUB_TOKEN: ${{ github.token }}
+        # The oracle SELECTS the run and READS its receipt in one process, from
+        # the pinned organization execution workflow named in
+        # `.github/lane3-execution.json` (ADR-0070, amendment 2026-10-05). No
+        # earlier step lists or downloads a run: a separate download could read
+        # a different run from the one selected. While that file records no
+        # admitted surface, the oracle refuses — the designed state until the
+        # admission evidence in docs/LANE3_EXECUTION_TOPOLOGY.md § 7 exists.
+        # Whether this job token can read the execution repository's runs, jobs,
+        # approvals and artifacts is measured there; if it cannot, a read-only
+        # App installation token scoped to that repository replaces it here.
         run: |
           set -euo pipefail
-          run_id="$(gh run list --workflow exposure-rehearsal.yml \
-            --commit "${GITHUB_SHA}" --limit 1 \
-            --json databaseId -q '.[0].databaseId // empty')"
-          if [ -z "${run_id}" ]; then
-            echo "REFUSED: no Lane 3 exposure rehearsal run exists for ${GITHUB_SHA}." >&2
-            echo "Run exposure-rehearsal.yml against this exact commit first." >&2
-            exit 1
-          fi
           mkdir -p .rehearsal
-          gh run download "${run_id}" -n lane3-rehearsal-receipt -D .rehearsal
           echo "release_revision=${GITHUB_SHA}"
           echo "candidate_source_revision=${{ steps.candidate.outputs.candidate_source_sha }}"
           .foundation-candidate/bin/python -E -P scripts/require_rehearsal.py \
-            "${GITHUB_SHA}" --receipt .rehearsal/receipt.json \
+            "${GITHUB_SHA}" --receipt-out .rehearsal/receipt.json \
             --artifact-digest "${{ steps.candidate.outputs.candidate_sha256 }}" \
             | tee -a "${GITHUB_OUTPUT}"
 

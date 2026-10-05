@@ -1224,11 +1224,21 @@ specifics) points here and must never fork these rules.
     oracle parses the resulting receipt with the same installed wheel. A
     dispatch-provided artifact digest or a `sys.path` insertion into
     `packages/dotmac-deployment-foundation/src` would attest checkout behaviour
-    while publishing different bytes, so both are refused. The workflow run's
-    `head_sha` remains the protected-main oracle; the receipt's artifact digest
-    binds that run through the committed candidate record to the bytes it
-    executed.
-    (`tests/architecture/test_lane3_candidate_artifact_execution.py`)
+    while publishing different bytes, so both are refused. The rehearsal runs
+    in the organization execution repository pinned by
+    `.github/lane3-execution.json` (ADR-0070, amendment 2026-10-05). The
+    protected-main oracle is the Starter revision that run's launcher checked
+    out:
+    - it is named in the run's title, in the shared dispatch grammar;
+    - it is recorded in the receipt;
+    - `verify_publication` compares it with the release revision.
+
+    The oracle reads a `RehearsalReceipt.v2` from exactly the run it selected.
+    `require_execution_run` binds the receipt to that run, and the artifact
+    digest binds it, through the committed candidate record, to the bytes it
+    executed. While that file records no admitted surface, publication refuses.
+    (`tests/architecture/test_lane3_candidate_artifact_execution.py`;
+    `tests/architecture/test_lane3_execution_oracle.py`)
 
     **The lane is incapable of publishing, not merely not asked to.** Publish
     authority here rests on exactly two declarations: `environment:` (the
