@@ -36,30 +36,47 @@ the generated table instead of arithmetically invisible.
 from __future__ import annotations
 
 import dataclasses
+import ipaddress
 import json
+import re
 from collections.abc import Mapping, Sequence
 from enum import Enum
-from typing import Any, Final
+from typing import TYPE_CHECKING, Any, Final
 
 from .digest import Digest, require_same_digest
 from .errors import SpecError
+from .execution_plan_v3 import FoundationExecutionPlanV3
 from .version import VERSION
+
+if TYPE_CHECKING:  # pragma: no cover - typing only; engine.run is import-heavy
+    from .engine.run import DeploymentOutcome
 
 __all__ = [
     "REHEARSAL_RECEIPT_SCHEMA",
+    "REHEARSAL_RECEIPT_V2_SCHEMA",
     "REQUIRED_ITEMS",
+    "ExecutionRunBindingV1",
     "LaneThreeItem",
     "RehearsalReceiptV1",
+    "RehearsalReceiptV2",
     "RequirementResult",
     "RequirementStatus",
     "build_receipt",
+    "build_receipt_v2",
     "render_pending_document",
     "render_status_document",
+    "require_execution_run",
     "require_rehearsed_artifact",
     "verify_publication",
 ]
 
 REHEARSAL_RECEIPT_SCHEMA: Final = "RehearsalReceipt.v1"
+
+#: The successor. A NEW schema name rather than new fields under v1: v1 has
+#: crossed an artifact boundary in five built candidate wheels, and one schema
+#: name identifying two contracts is the defect this package already paid for
+#: once. See :func:`build_receipt_v2` for what v2 binds that v1 cannot.
+REHEARSAL_RECEIPT_V2_SCHEMA: Final = "RehearsalReceipt.v2"
 
 #: Lane 3 and only Lane 3. Lane 2 proves a real engine, database, ingress
 #: handoff and restore loop; it says nothing about address-family exposure,
@@ -237,10 +254,14 @@ class RequirementResult:
         }
 
 
-@dataclasses.dataclass(frozen=True, slots=True)
-class RehearsalReceiptV1:
-    """The canonical, digest-bearing record of one Lane 3 execution."""
+class _ReceiptReading:
+    """Readers shared by every receipt schema, over ``self.content``.
 
+    Holds no state of its own; each schema's dataclass owns its ``content``
+    and its own parser, so a reader of one schema never interprets another.
+    """
+
+    __slots__ = ()
     content: dict[str, Any]
 
     def canonical_bytes(self) -> bytes:
@@ -279,10 +300,6 @@ class RehearsalReceiptV1:
         return str(self.content["foundation_artifact_digest"])
 
     @property
-    def authorization_run_id(self) -> str:
-        return str(self.content["authorization_run_id"])
-
-    @property
     def results(self) -> tuple[RequirementResult, ...]:
         return tuple(
             RequirementResult(
@@ -299,6 +316,23 @@ class RehearsalReceiptV1:
             if result.code == code:
                 return result
         raise SpecError(f"the receipt carries no result for item {code!r}")
+
+
+@dataclasses.dataclass(frozen=True, slots=True)
+class RehearsalReceiptV1(_ReceiptReading):
+    """The canonical, digest-bearing record of one Lane 3 execution.
+
+    READABLE AS HISTORY. Its gate item 9 forces three caller-supplied digests
+    equal, so its middle term can only ever be the descriptor digest, never the
+    authorized ``ExecutionPlanDigestV1`` (``AGENTS.md`` rule 49). The release
+    gate therefore reads :class:`RehearsalReceiptV2`.
+    """
+
+    content: dict[str, Any]
+
+    @property
+    def authorization_run_id(self) -> str:
+        return str(self.content["authorization_run_id"])
 
     @classmethod
     def from_json(cls, payload: str | bytes) -> RehearsalReceiptV1:
@@ -376,23 +410,7 @@ def build_receipt(
         what="gate item 9 (digest equality)",
     )
 
-    seen: set[str] = set()
-    rows: list[dict[str, Any]] = []
-    for result in results:
-        if result.code in seen:
-            raise SpecError(
-                f"item {result.code!r} appears twice in the receipt. Two rows "
-                "for one item is how a failure hides behind a pass"
-            )
-        seen.add(result.code)
-        rows.append(result.as_document())
-    missing = sorted(set(_BY_CODE) - seen)
-    if missing:
-        raise SpecError(
-            f"the receipt omits {missing}. Every one of the sixteen must carry "
-            "an explicit status — an absent item is not an implicit pass, and "
-            "silence is exactly how the previous count went wrong"
-        )
+    rows = _rows(results)
 
     content: dict[str, Any] = {
         "schema": REHEARSAL_RECEIPT_SCHEMA,
@@ -413,13 +431,412 @@ def build_receipt(
         "probe_identity": str(probe_identity).strip(),
         "started_at": str(started_at).strip(),
         "finished_at": str(finished_at).strip(),
-        "results": sorted(rows, key=lambda row: _BY_CODE[str(row["code"])].number),
+        "results": rows,
     }
     return RehearsalReceiptV1(content=content)
 
 
+def _rows(results: Sequence[RequirementResult]) -> list[dict[str, Any]]:
+    """The sixteen rows, each exactly once, in item order — or a refusal."""
+    seen: set[str] = set()
+    rows: list[dict[str, Any]] = []
+    for result in results:
+        if result.code in seen:
+            raise SpecError(
+                f"item {result.code!r} appears twice in the receipt. Two rows "
+                "for one item is how a failure hides behind a pass"
+            )
+        seen.add(result.code)
+        rows.append(result.as_document())
+    missing = sorted(set(_BY_CODE) - seen)
+    if missing:
+        raise SpecError(
+            f"the receipt omits {missing}. Every one of the sixteen must carry "
+            "an explicit status — an absent item is not an implicit pass, and "
+            "silence is exactly how the previous count went wrong"
+        )
+    return sorted(rows, key=lambda row: _BY_CODE[str(row["code"])].number)
+
+
+@dataclasses.dataclass(frozen=True, slots=True)
+class ExecutionRunBindingV1:
+    """The one workflow run that produced a receipt, by immutable coordinates.
+
+    Repository ID, not name: a renamed or recreated repository keeps its name
+    and changes its ID, so a name would let a receipt from a substitute
+    repository pass as this one. Run ID and attempt, because a re-run attempt
+    of one run is a different execution with a different outcome.
+
+    A receipt that does not bind its run can be moved from the run that
+    produced it to another run of the same revision — the publication oracle
+    selects a RUN, and :func:`require_execution_run` is what makes the receipt
+    it reads belong to that run rather than merely to that commit.
+    """
+
+    repository_id: int
+    run_id: int
+    run_attempt: int
+
+    def __post_init__(self) -> None:
+        for name in ("repository_id", "run_id", "run_attempt"):
+            value = getattr(self, name)
+            # `bool` is an `int`; `True` is not a run.
+            if isinstance(value, bool) or not isinstance(value, int) or value < 1:
+                raise SpecError(
+                    f"execution run {name} must be a positive integer, got "
+                    f"{value!r}. A run named by anything else cannot be read "
+                    "back from the oracle that selected it"
+                )
+
+    def as_document(self) -> dict[str, int]:
+        return {
+            "repository_id": self.repository_id,
+            "run_id": self.run_id,
+            "run_attempt": self.run_attempt,
+        }
+
+
+#: A topology-record reference: ``<record-key>@<version>``. The key names an
+#: entry in the private topology record; the version is that record's version.
+#: No dot, no colon, no slash — a hostname, an address or a path does not
+#: parse, so a vantage cannot be written into a public receipt by accident.
+_VANTAGE_REF: Final = re.compile(r"[a-z0-9][a-z0-9_-]{0,63}@[1-9][0-9]{0,9}")
+
+_V2_KEYS: Final = frozenset(
+    {
+        "schema",
+        "lane",
+        "foundation_version",
+        "foundation_revision",
+        "foundation_artifact_digest",
+        "descriptor_digest",
+        "execution_plan_digest",
+        "executed_execution_plan_digest",
+        "executed_descriptor_digest",
+        "fixture_digest",
+        "evidence_bundle_digest",
+        "controller_identity",
+        "target_id",
+        "host_id",
+        "lease_id",
+        "probe_vantage_ref",
+        "execution_run",
+        "started_at",
+        "finished_at",
+        "results",
+    }
+)
+
+
+def _require_not_an_address(name: str, value: str) -> None:
+    """Refuse an IP literal where an opaque identifier belongs.
+
+    Deliberately narrow. Fleet owns the ``host_id`` grammar (ADR-0073), so this
+    module does not invent one; it refuses only the one shape that is never an
+    identifier and always topology. A hostname is not caught here, and that
+    region is stated rather than implied.
+    """
+    candidate = value.strip().strip("[]")
+    try:
+        ipaddress.ip_address(candidate)
+    except ValueError:
+        return
+    raise SpecError(
+        f"{name} {value!r} is an IP address. A Lane 3 receipt is published, and "
+        "an address in it is topology in public; it carries the plan's opaque "
+        "identifier instead"
+    )
+
+
+@dataclasses.dataclass(frozen=True, slots=True)
+class RehearsalReceiptV2(_ReceiptReading):
+    """The Lane 3 receipt the release gate reads.
+
+    What v2 binds that v1 cannot, each a field v1's frozen schema has no room
+    for:
+
+    - **Gate item 9 as a chain, not an equality.** The canonical descriptor
+      digest, the AUTHORIZED ``ExecutionPlanDigestV1`` (the plan Control froze),
+      and the executed outcome's own copies of both. v1 forced three
+      caller-supplied digests equal, so its "authorized plan" could only ever be
+      the descriptor digest restated.
+    - **The bytes the plan authorized.** The plan's candidate wheel digest must
+      be the artifact this rehearsal executed.
+    - **Opaque target identity.** ``target_id`` and ``host_id`` are taken from
+      the authorized plan, never from a caller, and an IP literal is refused.
+    - **A private vantage, referenced.** ``probe_vantage_ref`` names a record
+      key and version; the address stays in the record.
+    - **The run that produced it** (:class:`ExecutionRunBindingV1`).
+    - **The raw evidence, by digest.** ``evidence_bundle_digest`` is the digest
+      of the evidence bundle exactly as published (encrypted, per the Lane 3
+      design), so rows can point into it without the receipt carrying it.
+    """
+
+    content: dict[str, Any]
+
+    @property
+    def execution_plan_digest(self) -> str:
+        return str(self.content["execution_plan_digest"])
+
+    @property
+    def execution_run(self) -> ExecutionRunBindingV1:
+        run = self.content["execution_run"]
+        return ExecutionRunBindingV1(
+            repository_id=run["repository_id"],
+            run_id=run["run_id"],
+            run_attempt=run["run_attempt"],
+        )
+
+    @classmethod
+    def from_json(cls, payload: str | bytes) -> RehearsalReceiptV2:
+        try:
+            content = json.loads(payload)
+        except ValueError as exc:
+            raise SpecError(f"the receipt is not valid JSON: {exc}") from exc
+        if not isinstance(content, dict):
+            raise SpecError("a receipt is a JSON object")
+        schema = content.get("schema")
+        if schema != REHEARSAL_RECEIPT_V2_SCHEMA:
+            raise SpecError(
+                f"expected {REHEARSAL_RECEIPT_V2_SCHEMA}, got {schema!r}. "
+                + (
+                    "A v1 receipt cannot carry the authorized execution plan "
+                    "digest, so it is history, not publication evidence"
+                    if schema == REHEARSAL_RECEIPT_SCHEMA
+                    else "A reader of v2 refuses a document it does not "
+                    "understand rather than interpreting unknown fields"
+                )
+            )
+        keys = set(content)
+        if keys != _V2_KEYS:
+            raise SpecError(
+                f"a {REHEARSAL_RECEIPT_V2_SCHEMA} carries exactly its declared "
+                f"fields; missing {sorted(_V2_KEYS - keys)}, unknown "
+                f"{sorted(keys - _V2_KEYS)}"
+            )
+        receipt = cls(content=content)
+        # Re-derive every typed field so a hand-edited document is refused on
+        # read rather than at the first property access.
+        try:
+            if not isinstance(content["execution_run"], dict):
+                raise SpecError("execution_run is not an object")
+            _ = receipt.execution_run
+            _rows(receipt.results)
+        except (KeyError, TypeError, ValueError) as exc:
+            raise SpecError(f"the receipt is malformed: {exc}") from exc
+        for name in ("target_id", "host_id"):
+            _require_not_an_address(name, str(content[name]))
+        if not _VANTAGE_REF.fullmatch(str(content["probe_vantage_ref"])):
+            raise SpecError("probe_vantage_ref is not `<record-key>@<version>`")
+        return receipt
+
+
+def build_receipt_v2(
+    *,
+    foundation_revision: str,
+    foundation_artifact_digest: str,
+    descriptor_digest: str,
+    execution_plan: FoundationExecutionPlanV3,
+    authorized_execution_plan_digest: str,
+    execution_outcome: DeploymentOutcome,
+    fixture_digest: str,
+    evidence_bundle_digest: str,
+    controller_identity: str,
+    lease_id: str,
+    probe_vantage_ref: str,
+    execution_run: ExecutionRunBindingV1,
+    started_at: str,
+    finished_at: str,
+    results: Sequence[RequirementResult],
+) -> RehearsalReceiptV2:
+    """Assemble a v2 receipt, refusing anything a reader could not check later.
+
+    ## Gate item 9 is a chain of four comparisons
+
+    1. The canonical descriptor this rehearsal loaded is the descriptor the
+       plan was rendered from (``execution_plan.descriptor_digest``).
+    2. The plan in hand is the plan Control froze: its ``digest()`` equals the
+       authorized ``ExecutionPlanDigestV1`` (the grant's, never a dispatch
+       field).
+    3. The executed outcome reports that same authorized plan digest.
+    4. The executed outcome reports that same descriptor digest.
+
+    An empty outcome digest is refused rather than skipped: ``DeploymentOutcome``
+    reports "not bound to an authorized plan" as empty precisely so that a
+    consumer can refuse it. The plan's digest and the descriptor digest are
+    different measurements of different documents, so equal values are refused
+    too — that is the degenerate v1 shape arriving under a v2 name.
+
+    ## The plan also names the bytes and the controller
+
+    Its ``candidate_wheel_digest`` must be ``foundation_artifact_digest`` and its
+    ``controller_ssh_fingerprint`` must be ``controller_identity``. A rehearsal
+    of other bytes, or driven by another key, is not the rehearsal the plan
+    authorized.
+    """
+    if not isinstance(execution_plan, FoundationExecutionPlanV3):
+        raise SpecError(
+            "build_receipt_v2 takes the authorized FoundationExecutionPlanV3 "
+            f"itself, got {type(execution_plan).__name__}. A digest string in its "
+            "place is a claim the receipt could not check"
+        )
+    if not isinstance(execution_run, ExecutionRunBindingV1):
+        raise SpecError("execution_run must be an ExecutionRunBindingV1")
+    for name, value in (
+        ("foundation_revision", foundation_revision),
+        ("controller_identity", controller_identity),
+        ("lease_id", lease_id),
+        ("started_at", started_at),
+        ("finished_at", finished_at),
+    ):
+        if not str(value).strip():
+            raise SpecError(
+                f"{name} is empty. Every field on a receipt exists so a reader "
+                "can go and check it; an empty one is an unverifiable claim"
+            )
+    revision = str(foundation_revision).strip().lower()
+    if len(revision) != 40 or any(c not in "0123456789abcdef" for c in revision):
+        raise SpecError(
+            f"foundation_revision {foundation_revision!r} is not a full commit. "
+            "A rehearsal is evidence about one exact revision or about nothing"
+        )
+    if not _VANTAGE_REF.fullmatch(str(probe_vantage_ref)):
+        raise SpecError(
+            f"probe_vantage_ref {probe_vantage_ref!r} is not "
+            "`<record-key>@<version>`. The vantage is named by its private "
+            "record, never by an address or a hostname"
+        )
+    for name in ("target_id", "host_id"):
+        _require_not_an_address(name, getattr(execution_plan, name))
+
+    artifact = str(
+        Digest.parse(foundation_artifact_digest, where="foundation_artifact_digest")
+    )
+    descriptor = str(Digest.parse(descriptor_digest, where="descriptor_digest"))
+    authorized = str(
+        Digest.parse(
+            authorized_execution_plan_digest, where="authorized_execution_plan_digest"
+        )
+    )
+    rendered = str(Digest.parse(execution_plan.digest(), where="execution_plan"))
+
+    # ── gate item 9 ────────────────────────────────────────────────────────
+    if authorized == descriptor:
+        raise SpecError(
+            "gate item 9: the authorized execution plan digest equals the "
+            "descriptor digest. They measure different documents, so equality "
+            "means one was substituted for the other — the degenerate v1 shape"
+        )
+    plan_descriptor = str(
+        Digest.parse(execution_plan.descriptor_digest, where="plan descriptor_digest")
+    )
+    if plan_descriptor != descriptor:
+        raise SpecError(
+            f"gate item 9: the plan was rendered from descriptor {plan_descriptor} "
+            f"and this rehearsal loaded {descriptor}"
+        )
+    if rendered != authorized:
+        raise SpecError(
+            f"gate item 9: the plan in hand digests to {rendered} and the "
+            f"authorized plan is {authorized}. Only the plan Control froze is "
+            "the authorized plan"
+        )
+    executed: dict[str, str] = {}
+    for name in ("execution_plan_digest", "descriptor_digest"):
+        value = str(getattr(execution_outcome, name, "") or "").strip()
+        if not value:
+            raise SpecError(
+                f"gate item 9: the execution outcome reports no {name}. An "
+                "outcome not bound to an authorized plan is reported as empty "
+                "so that it can be refused, and it is"
+            )
+        executed[name] = str(Digest.parse(value, where=f"executed {name}"))
+    if executed["execution_plan_digest"] != authorized:
+        raise SpecError(
+            f"gate item 9: the outcome executed plan "
+            f"{executed['execution_plan_digest']} and the authorized plan is "
+            f"{authorized}"
+        )
+    if executed["descriptor_digest"] != descriptor:
+        raise SpecError(
+            f"gate item 9: the outcome executed descriptor "
+            f"{executed['descriptor_digest']} and this rehearsal loaded "
+            f"{descriptor}"
+        )
+
+    # ── the plan names the bytes and the controller ────────────────────────
+    planned_wheel = str(
+        Digest.parse(
+            execution_plan.candidate_wheel_digest, where="plan candidate_wheel_digest"
+        )
+    )
+    if planned_wheel != artifact:
+        raise SpecError(
+            f"the plan authorized candidate {planned_wheel} and this rehearsal "
+            f"executed {artifact}. A rehearsal of other bytes is not the one "
+            "the plan authorized"
+        )
+    controller = str(controller_identity).strip()
+    if execution_plan.controller_ssh_fingerprint != controller:
+        raise SpecError(
+            f"the plan binds controller {execution_plan.controller_ssh_fingerprint} "
+            f"and this rehearsal was driven by {controller}"
+        )
+
+    rows = _rows(results)
+    content: dict[str, Any] = {
+        "schema": REHEARSAL_RECEIPT_V2_SCHEMA,
+        "lane": LANE,
+        "foundation_version": VERSION,
+        "foundation_revision": revision,
+        "foundation_artifact_digest": artifact,
+        "descriptor_digest": descriptor,
+        "execution_plan_digest": authorized,
+        "executed_execution_plan_digest": executed["execution_plan_digest"],
+        "executed_descriptor_digest": executed["descriptor_digest"],
+        "fixture_digest": str(Digest.parse(fixture_digest, where="fixture_digest")),
+        "evidence_bundle_digest": str(
+            Digest.parse(evidence_bundle_digest, where="evidence_bundle_digest")
+        ),
+        "controller_identity": controller,
+        "target_id": execution_plan.target_id,
+        "host_id": execution_plan.host_id,
+        "lease_id": str(lease_id).strip(),
+        "probe_vantage_ref": str(probe_vantage_ref),
+        "execution_run": execution_run.as_document(),
+        "started_at": str(started_at).strip(),
+        "finished_at": str(finished_at).strip(),
+        "results": rows,
+    }
+    return RehearsalReceiptV2(content=content)
+
+
+def require_execution_run(
+    receipt: RehearsalReceiptV2, *, run: ExecutionRunBindingV1
+) -> None:
+    """Refuse unless this receipt was produced by exactly ``run``.
+
+    The publication oracle selects ONE run — newest-then-check — and then reads
+    a receipt. Without this, the receipt it reads need only be about the same
+    commit, so a receipt produced by an earlier, passing run could stand in for
+    the selected run that failed. A separate function, like
+    :func:`require_rehearsed_artifact`, so its absence is visible in the gate.
+    """
+    if not isinstance(receipt, RehearsalReceiptV2):
+        raise SpecError(
+            "only a RehearsalReceipt.v2 binds the run that produced it; a v1 "
+            "receipt cannot be tied to the run the oracle selected"
+        )
+    if receipt.execution_run != run:
+        raise SpecError(
+            f"the receipt was produced by run {receipt.execution_run.as_document()} "
+            f"and the oracle selected {run.as_document()}. A receipt from another "
+            "run says nothing about the run that was selected"
+        )
+
+
 def require_rehearsed_artifact(
-    receipt: RehearsalReceiptV1, *, artifact_digest: str
+    receipt: RehearsalReceiptV1 | RehearsalReceiptV2, *, artifact_digest: str
 ) -> None:
     """Refuse unless this receipt is about the BYTES in hand.
 
@@ -463,7 +880,9 @@ def require_rehearsed_artifact(
         )
 
 
-def verify_publication(receipt: RehearsalReceiptV1, *, revision: str) -> None:
+def verify_publication(
+    receipt: RehearsalReceiptV1 | RehearsalReceiptV2, *, revision: str
+) -> None:
     """Refuse publication unless EVERY item is `executed_passed` at `revision`.
 
     Three refusals, in the order a reader would ask them.
@@ -590,7 +1009,7 @@ def render_pending_document(
     return "\n".join(lines)
 
 
-def render_status_document(receipt: RehearsalReceiptV1) -> str:
+def render_status_document(receipt: RehearsalReceiptV1 | RehearsalReceiptV2) -> str:
     """The status table, DERIVED from the receipt.
 
     This function exists because the previous document was hand-maintained and
@@ -599,6 +1018,7 @@ def render_status_document(receipt: RehearsalReceiptV1) -> str:
     """
     rows = {result.code: (result.status, result.detail) for result in receipt.results}
     passed = sum(1 for status, _ in rows.values() if status.satisfies_publication)
+    content = receipt.content
     lines: list[str] = [
         "<!-- GENERATED by dotmac_deployment_foundation.rehearsal."
         "render_status_document — do not hand-edit. -->",
@@ -607,15 +1027,34 @@ def render_status_document(receipt: RehearsalReceiptV1) -> str:
         f"{len(REQUIRED_ITEMS)} executed and passed",
         "",
         f"- **Foundation revision:** `{receipt.foundation_revision}`",
-        f"- **Authorization run:** `{receipt.authorization_run_id}`",
-        "- **Bound digest (all three terms):** "
-        f"`{receipt.content['descriptor_digest']}`",
-        f"- **Target:** `{receipt.content['target']}` "
-        f"under lease `{receipt.content['lease_id']}`",
-        f"- **Controller identity:** `{receipt.content['controller_identity']}`",
-        f"- **External probe:** `{receipt.content['probe_identity']}`",
-        f"- **Window:** {receipt.content['started_at']} → "
-        f"{receipt.content['finished_at']}",
+    ]
+    if isinstance(receipt, RehearsalReceiptV2):
+        # Opaque identifiers only: this document is published beside the
+        # receipt, so it carries nothing the receipt itself may not.
+        run = receipt.execution_run
+        lines += [
+            f"- **Schema:** `{content['schema']}`",
+            f"- **Execution run:** repository `{run.repository_id}`, run "
+            f"`{run.run_id}`, attempt `{run.run_attempt}`",
+            f"- **Descriptor digest:** `{content['descriptor_digest']}`",
+            f"- **Authorized execution plan:** `{content['execution_plan_digest']}`",
+            f"- **Target / host:** `{content['target_id']}` / `{content['host_id']}` "
+            f"under lease `{content['lease_id']}`",
+            f"- **Controller identity:** `{content['controller_identity']}`",
+            f"- **Probe vantage:** `{content['probe_vantage_ref']}`",
+            f"- **Evidence bundle:** `{content['evidence_bundle_digest']}`",
+        ]
+    else:
+        lines += [
+            f"- **Authorization run:** `{receipt.authorization_run_id}`",
+            "- **Bound digest (all three terms):** "
+            f"`{content['descriptor_digest']}`",
+            f"- **Target:** `{content['target']}` under lease `{content['lease_id']}`",
+            f"- **Controller identity:** `{content['controller_identity']}`",
+            f"- **External probe:** `{content['probe_identity']}`",
+        ]
+    lines += [
+        f"- **Window:** {content['started_at']} → {content['finished_at']}",
         f"- **Receipt digest:** `{receipt.sha256_digest()}`",
         "",
         "Only `executed_passed` satisfies publication. Every other status is "

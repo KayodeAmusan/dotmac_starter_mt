@@ -224,6 +224,26 @@
   `verify_publication()`, `render_status_document()` and
   `render_pending_document()`. The sixteen item CODES are contract — a release
   gate reads them — and only `executed_passed` satisfies publication.
+- `RehearsalReceipt.v2`: `RehearsalReceiptV2`, `ExecutionRunBindingV1`,
+  `build_receipt_v2()`, `require_execution_run()` and
+  `REHEARSAL_RECEIPT_V2_SCHEMA`. It is the receipt the release gate reads; v1
+  stays readable as history. Its key set is CLOSED, and its reader refuses a
+  missing or unknown field.
+  - **Gate item 9 is a chain** over the authorized `ExecutionPlanDigestV1`, the
+    plan's descriptor digest and the executed `DeploymentOutcome`'s copies of
+    both. The builder takes the `FoundationExecutionPlanV3` itself, never a
+    digest string.
+  - **The plan names the bytes and the controller.** Its candidate wheel digest
+    and controller fingerprint must equal the rehearsed artifact and the
+    controller identity.
+  - **Target and host come from the plan.** `target_id` and `host_id` are taken
+    from the plan, and an IP literal is refused. Fleet owns the `host_id`
+    grammar, so hostnames are not policed here.
+  - **The vantage is a reference.** `probe_vantage_ref` is
+    `<record-key>@<version>`.
+  - **The receipt binds its run.** It carries the producing run's immutable
+    repository ID, run ID and attempt.
+  - **Adding a field means v3.** v1 could not be widened for the same reason.
 - `HostLease.v2`: `HostLease`, `load_lease()`, `write_lease()`. A lease is
   never self-granted; `authorization_run_id` is mandatory, and so is the
   `workload_principal` that holds and releases it. `HostLease.v1` is READABLE AS

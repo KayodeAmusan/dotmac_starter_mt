@@ -267,7 +267,7 @@ def main(argv: list[str] | None = None) -> int:
     # validate a different contract from the bytes it later publishes.
     from dotmac_deployment_foundation.errors import SpecError
     from dotmac_deployment_foundation.rehearsal import (
-        RehearsalReceiptV1,
+        RehearsalReceiptV2,
         require_rehearsed_artifact,
         verify_publication,
     )
@@ -281,7 +281,17 @@ def main(argv: list[str] | None = None) -> int:
         )
         return EXIT_REFUSED
     try:
-        receipt = RehearsalReceiptV1.from_json(receipt_path.read_text(encoding="utf-8"))
+        # v2 ONLY. A v1 receipt cannot carry the authorized
+        # `ExecutionPlanDigestV1` (its item 9 forced three caller digests equal),
+        # so the reader refuses it by schema rather than this gate counting it.
+        #
+        # Not yet called here: `require_execution_run`. The run this oracle
+        # selects is still a Starter-repository run, while a v2 receipt binds the
+        # organization execution repository's run. Binding the two is the oracle
+        # amendment in docs/LANE3_EXECUTION_TOPOLOGY.md § 6 (D-S2), which adds
+        # that call together with the new run selection. Until then no v2 receipt
+        # can exist: the runner still emits v1 and refuses at qualification.
+        receipt = RehearsalReceiptV2.from_json(receipt_path.read_text(encoding="utf-8"))
         verify_publication(receipt, revision=args.sha)
         # THE THIRD BINDING. `verify_publication` above compares the LANE 3
         # RUNNER revision with the RELEASE revision; this compares the receipt
@@ -298,7 +308,7 @@ def main(argv: list[str] | None = None) -> int:
     print(f"rehearsal_head_sha={proof['head_sha']}")
     print(f"rehearsal_lane={receipt.lane}")
     print(f"rehearsal_receipt_digest={receipt.sha256_digest()}")
-    print(f"rehearsal_authorization_run={receipt.authorization_run_id}")
+    print(f"rehearsal_execution_plan_digest={receipt.execution_plan_digest}")
     # All THREE revisions, named separately, on the record that decides the
     # publish. A reader comparing them should not have to join two files.
     print(f"rehearsal_runner_revision={receipt.foundation_revision}")

@@ -29,7 +29,9 @@ sys.path.insert(
 )
 
 from dotmac_deployment_foundation.rehearsal import (
+    REHEARSAL_RECEIPT_SCHEMA,
     RehearsalReceiptV1,
+    RehearsalReceiptV2,
     RequirementStatus,
     render_pending_document,
     render_status_document,
@@ -42,10 +44,12 @@ OUTPUT = _ROOT / "docs/inventories/deployment-exposure-rehearsal-status.md"
 
 def render(receipt_path: str | None) -> str:
     if receipt_path:
-        receipt = RehearsalReceiptV1.from_json(
-            pathlib.Path(receipt_path).read_text(encoding="utf-8")
-        )
-        return render_status_document(receipt)
+        payload = pathlib.Path(receipt_path).read_text(encoding="utf-8")
+        # Each schema's own reader, chosen by the declared schema: a v1 document
+        # renders as history, and neither reader interprets the other's fields.
+        if json.loads(payload).get("schema") == REHEARSAL_RECEIPT_SCHEMA:
+            return render_status_document(RehearsalReceiptV1.from_json(payload))
+        return render_status_document(RehearsalReceiptV2.from_json(payload))
     baseline = json.loads(BASELINE.read_text(encoding="utf-8"))
     rows = {
         code: (RequirementStatus(row["status"]), row["detail"])
@@ -56,7 +60,9 @@ def render(receipt_path: str | None) -> str:
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="generate_rehearsal_status.py")
-    parser.add_argument("--receipt", default="", help="a RehearsalReceipt.v1")
+    parser.add_argument(
+        "--receipt", default="", help="a RehearsalReceipt.v2 (v1 renders as history)"
+    )
     parser.add_argument(
         "--check", action="store_true", help="fail if the committed file drifted"
     )
