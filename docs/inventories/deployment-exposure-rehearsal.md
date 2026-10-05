@@ -1,5 +1,13 @@
 # Exposure rehearsal — Lane 3, the plan and its prerequisites
 
+> **Addresses redacted 2026-10-05** at the owner's direction: this is a public
+> repository and these were live production estate addresses. Each redaction
+> names the address's ROLE. The role → address mapping, which keeps this record
+> checkable as evidence, is held privately in the Dotmac Knowledge record
+> `dotmac-estate-address-redaction-map-2026-10-05`. The original values remain
+> in this repository's public Git history; redaction does not withdraw them.
+
+
 **The status table moved.** It is now GENERATED at
 `docs/inventories/deployment-exposure-rehearsal-status.md`, from
 `RehearsalReceipt.v1` when a run exists and from
@@ -86,7 +94,7 @@ into the `idp-ha` private network. **That NIC is gone.** Measured with
 
 ```
 lo    UNKNOWN  127.0.0.1/8 ::1/128
-eth0  UP       94.72.99.155/20 2a02:c204:2353:7605::1/64 fe80::250:56ff:fe66:caca/64
+eth0  UP       [redacted 2026-10-05: probe vantage IPv4]/20 [redacted 2026-10-05: probe vantage IPv6]/64 [redacted 2026-10-05: probe vantage link-local, MAC-derived]/64
 ```
 
 No `eth1`. No tunnel, wireguard, tun, tap, gre, vti or ipip device. Policy
@@ -96,10 +104,10 @@ Docker. No `/opt/openbao` and zero `BAO`/`VAULT` environment variables.
 Both paths to Role A leave via `eth0`, checked per family.
 
 > **SUPERSEDED 2026-09-04 — these measurements name the retired target.** They
-> were taken against `85.190.246.211`, which is no longer Role A. They are kept
+> were taken against `[redacted 2026-10-05: shared rehearsal host IPv4]`, which is no longer Role A. They are kept
 > as the RECORD OF WHAT WAS DONE and must not be read as current: the new
-> target's public IPv4 is `160.119.127.202` and its IPv6 is
-> `2c0f:e888:11::102`, and neither has been routed from this vantage. The
+> target's public IPv4 is `[redacted 2026-10-05: rehearsal target public IPv4]` and its IPv6 is
+> `[redacted 2026-10-05: rehearsal target IPv6]`, and neither has been routed from this vantage. The
 > replacement numbers are deliberately absent rather than transcribed from the
 > new addresses — a routing result is a measurement, and writing one that
 > nobody took is the failure this whole document exists against. Re-run both
@@ -107,8 +115,8 @@ Both paths to Role A leave via `eth0`, checked per family.
 > return.
 
 ```
-ip route get 85.190.246.211          -> via 94.72.96.1 dev eth0 src 94.72.99.155
-ip -6 route get 2a02:c204:2353:7655::1 -> via fe80::1 dev eth0 src 2a02:c204:2353:7605::1
+ip route get [redacted 2026-10-05: shared rehearsal host IPv4]          -> via [redacted 2026-10-05: probe vantage gateway] dev eth0 src [redacted 2026-10-05: probe vantage IPv4]
+ip -6 route get [redacted 2026-10-05: shared rehearsal host IPv6] -> via fe80::1 dev eth0 src [redacted 2026-10-05: probe vantage IPv6]
 ```
 
 **One caveat, recorded rather than glossed.** The old third line —
@@ -251,9 +259,9 @@ precisely why a rehearsal run under a shared key cannot prove the CONTROLLER did
 it, only that somebody did.
 
 The access path to the registered control runner was verified 2026-08-30 and is
-**indirect**: `160.119.127.188:22` is source-restricted and is NOT reachable from
+**indirect**: `[redacted 2026-10-05: control runner public IPv4]:22` is source-restricted and is NOT reachable from
 the workstation (connect times out). It IS reachable from `seabone`
-(`160.119.127.195`, explicitly in the runner's allow set), which authenticates
+(`[redacted 2026-10-05: seabone jump host IPv4]`, explicitly in the runner's allow set), which authenticates
 successfully as `dotmac@dotmac-control-runner`. So the runner is usable, via
 seabone, once an identity exists to use.
 
@@ -310,10 +318,10 @@ run under a shared key cannot prove the CONTROLLER did it — only that somebody
 did — which is the difference between a procedurally and an evidentially
 controller-driven run.
 
-**Access path, verified 2026-08-30.** `160.119.127.188:22` is source-restricted
+**Access path, verified 2026-08-30.** `[redacted 2026-10-05: control runner public IPv4]:22` is source-restricted
 and NOT reachable from the workstation (connect times out). It IS reachable from
-`seabone` (`160.119.127.195`, explicitly in the runner's allow set), where
-`ssh dotmac@160.119.127.188` succeeds as `dotmac-control-runner`. So the runner
+`seabone` (`[redacted 2026-10-05: seabone jump host IPv4]`, explicitly in the runner's allow set), where
+`ssh dotmac@[redacted 2026-10-05: control runner public IPv4]` succeeds as `dotmac-control-runner`. So the runner
 is usable indirectly; what is missing is an identity, not a route.
 
 **The bootstrap, in order. Every step is a proposal.**
@@ -337,7 +345,7 @@ is usable indirectly; what is missing is an identity, not a route.
    runner; `command=` makes it incapable of an interactive shell. A key that can
    do anything proves only that a key was used.
 5. **Prefer WireGuard for the transport.** The runner already reaches Observer
-   as `100.64.53.2` over CGNAT space chosen so the tunnel does not inherit a
+   as `[redacted 2026-10-05: WireGuard peer address]` over CGNAT space chosen so the tunnel does not inherit a
    broad `10.0.0.0/8` accept. Extending that shape to Role A keeps the
    `from=` restriction meaningful against a stable inside address. Note the
    runner's egress output chain is `policy drop` with `ip protocol icmp accept`,
@@ -389,7 +397,7 @@ IPv6 socket declared loopback refusing the internet.
 Same port, same minute, two vantages:
 
 ```
-workstation (inside 160.119.124.0/22) -> ERP 9001 : OPEN
+workstation (inside [redacted 2026-10-05: estate public /22]) -> ERP 9001 : OPEN
 Role B      (outside every allowlist) -> ERP 9001 : refused
 ```
 
@@ -472,7 +480,7 @@ This is not bureaucracy. Both failures happened on this fleet on 2026-08-29.
   distinguish a loopback bind from a routable one — which is the single fact
   the whole lane exists to establish.
 - **A probe from inside an allowlist proves nothing about public
-  reachability.** The workstation sits inside `160.119.124.0/22`, which several
+  reachability.** The workstation sits inside `[redacted 2026-10-05: estate public /22]`, which several
   of this fleet's `DOCKER-USER` allowlists ACCEPT. Two agents independently
   connected to "public" ports from it and each escalated a P0 that did not
   exist. The connections were real; the conclusion was not.
@@ -490,21 +498,21 @@ genuinely disposable target, with a verified safety backup taken beforehand:
 |---|---|
 | name | `lane3-rehearsal-target` |
 | size | 4 GiB memory, 40 GiB disk |
-| private IPv4 | `10.120.120.54` |
-| public IPv4 | `160.119.127.202` |
-| IPv6 | `2c0f:e888:11::102` |
+| private IPv4 | `[redacted 2026-10-05: rehearsal target private IPv4]` |
+| public IPv4 | `[redacted 2026-10-05: rehearsal target public IPv4]` |
+| IPv6 | `[redacted 2026-10-05: rehearsal target IPv6]` |
 
-**The previous authorization named `85.190.246.211` and is withdrawn.** That
+**The previous authorization named `[redacted 2026-10-05: shared rehearsal host IPv4]` and is withdrawn.** That
 address is the shared dedicated test server — `CONTRIBUTING.md` and `AGENTS.md`
 both name it in that role, and they are correct to. A lane that induces a
 genuine apply-path failure and an automatic rollback cannot run on a host other
 agents are working on, and "disposable" and "shared workspace" cannot both be
-true of one machine. Any surviving `85.190.246.211` in a Role A sentence is
+true of one machine. Any surviving `[redacted 2026-10-05: shared rehearsal host IPv4]` in a Role A sentence is
 stale and must not be read as authorization.
 
 **PRECONDITION — SLAAC suppression, and it is not incidental.**
 `/etc/netplan/99-lane3-no-slaac.yaml` (`accept-ra: false`) is what makes the
-target egress IPv6 from the declared `2c0f:e888:11::102`. Without it the target
+target egress IPv6 from the declared `[redacted 2026-10-05: rehearsal target IPv6]`. Without it the target
 egresses from a SLAAC address, and then the far-end observation — the one that
 replaces the `__TARGET_OBSERVED_V6__` sentinel — **passes while measuring the
 wrong thing**: it reports an address nobody declared, and reports it
@@ -519,11 +527,11 @@ rehearsal that re-images the target or re-runs cloud-init must re-establish it
 before the far-end observation means anything.
 
 **HAZARD — the private address is three away from production ns1.**
-`10.120.120.51` is production ns1 and `10.120.120.54` is this target: the same
+`[redacted 2026-10-05: production ns1 private IPv4]` is production ns1 and `[redacted 2026-10-05: rehearsal target private IPv4]` is this target: the same
 /24. A static assignment typo or a DHCP collision lands the rehearsal on a
 production nameserver, and this lane rewrites firewall chains. The rebuilt VM
-must never boot with `10.120.120.51`. Measured 2026-09-04: no file in this
-repository contains `10.120.120.51`, or any `10.120.120.0/24` address at all,
+must never boot with `[redacted 2026-10-05: production ns1 private IPv4]`. Measured 2026-09-04: no file in this
+repository contains `[redacted 2026-10-05: production ns1 private IPv4]`, or any `[redacted 2026-10-05: production private /24]` address at all,
 and nothing here can supply one — `--target` is `required=True` with no default
 and the Lane 3 descriptor deliberately holds no address. So the repository is
 not a source of that mistake; the machine build is where it has to be prevented.
@@ -549,10 +557,10 @@ Where the plan is applied, snapshotted, re-observed and rolled back.
 deployment lock, hold a pre-change snapshot, re-observe its own sockets,
 `docker-proxy` processes and firewall chains, and roll back to the snapshot.
 
-### Role B — independent IPv6-capable external probe vantage — **`94.72.99.155`**
+### Role B — independent IPv6-capable external probe vantage — **`[redacted 2026-10-05: probe vantage IPv4]`**
 
 **Status: usable for Role A, and NOT yet a general external vantage.**
-Sources: v4 `94.72.99.155`, v6 `2a02:c204:2353:7605::1`.
+Sources: v4 `[redacted 2026-10-05: probe vantage IPv4]`, v6 `[redacted 2026-10-05: probe vantage IPv6]`.
 
 The general claim "outside every Dotmac allowlist" is **RETRACTED**. It was
 established by refusals measured only over public transport, and the host holds
@@ -567,21 +575,21 @@ satisfy.
 
 For Role A that was established, measured rather than assumed — **against the
 retired target, and therefore superseded on 2026-09-04.** The queries below
-name `85.190.246.211`; the new Role A is `160.119.127.202` /
-`2c0f:e888:11::102` and has not been routed from this vantage. Re-run and
+name `[redacted 2026-10-05: shared rehearsal host IPv4]`; the new Role A is `[redacted 2026-10-05: rehearsal target public IPv4]` /
+`[redacted 2026-10-05: rehearsal target IPv6]` and has not been routed from this vantage. Re-run and
 replace rather than editing the addresses in place, because the arrow's
 right-hand side is a result and not a restatement of its left.
 
 ```
-ip route get 85.190.246.211        -> via 94.72.96.1 dev eth0 src 94.72.99.155
-ip -6 route get 2a02:c204:2353:7655::1 -> dev eth0 src 2a02:c204:2353:7605::1
+ip route get [redacted 2026-10-05: shared rehearsal host IPv4]        -> via [redacted 2026-10-05: probe vantage gateway] dev eth0 src [redacted 2026-10-05: probe vantage IPv4]
+ip -6 route get [redacted 2026-10-05: shared rehearsal host IPv6] -> dev eth0 src [redacted 2026-10-05: probe vantage IPv6]
 ip route get 10.0.0.2              -> dev eth1 src 10.0.0.4
 ```
 
 The retired Role A was not in `10.0.0.0/22`, so the private NIC was not in the
 path and contaminated nothing measured against it. **The new target needs that
 re-established and the question is not identical:** it carries a private
-address of its own, `10.120.120.54`, which the retired one did not. That is
+address of its own, `[redacted 2026-10-05: rehearsal target private IPv4]`, which the retired one did not. That is
 outside `10.0.0.0/22` so the same conclusion is likely, but likely is not
 measured. The third line is the control: it
 shows the routing query discriminates rather than always answering `eth0`.
@@ -609,12 +617,12 @@ into a one-role one that looks complete, which is worse than not running it.
 
 | Condition | Evidence |
 |---|---|
-| global IPv6 with a default route | `2a02:c204:2353:7605::1/64`, default via `fe80::1` dev eth0 |
+| global IPv6 with a default route | `[redacted 2026-10-05: probe vantage IPv6]/64`, default via `fe80::1` dev eth0 |
 | IPv6 egress actually works | `[2606:4700:4700::1111]:443` and `[2001:4860:4860::8888]:53` both OPEN |
 | **outside every Dotmac allowlist** | OpenBao `8200`, ERP `9001`, ERP `6391` all **refused** |
 | **the refusals mean something** | **ERP `443` is OPEN from the same vantage** |
 | holds no fleet credentials | no `/opt/openbao`, zero `BAO`/`VAULT` environment variables |
-| can reach Role A | ~~`85.190.246.211:22` reachable~~ — **retired target; unmeasured against `160.119.127.202`** |
+| can reach Role A | ~~`[redacted 2026-10-05: shared rehearsal host IPv4]:22` reachable~~ — **retired target; unmeasured against `[redacted 2026-10-05: rehearsal target public IPv4]`** |
 
 **The fourth row is why the third can be believed.** Three refusals on their own
 are equally consistent with a vantage that cannot reach anything — a broken
@@ -639,7 +647,7 @@ apply to Role A.
 
 | Requirement | Why |
 |---|---|
-| **not** the workstation | its public IPv4 sits inside `160.119.124.0/22`, which several of this fleet's allowlists ACCEPT — this is the exact vantage that produced two false P0s on 2026-08-29 |
+| **not** the workstation | its public IPv4 sits inside `[redacted 2026-10-05: estate public /22]`, which several of this fleet's allowlists ACCEPT — this is the exact vantage that produced two false P0s on 2026-08-29 |
 | **not** `observe`, `s3` or `db-primary` | none has IPv6 egress, so none can run the IPv6 half at all |
 | IPv6 egress, verified against Role A specifically | a vantage's own egress check does not prove the path to one target |
 | its source address **enumerated against Role A's rule set before any probe** | `ProbeVantage.membership_established` is `False` until this is done, and the verifier refuses to conclude from an unestablished vantage |
@@ -654,7 +662,7 @@ freebie — and a product host inside the fleet's own ranges is not a neutral
 vantage anyway.
 
 So Role B needed a host that did not exist, and one was provisioned:
-`94.72.99.155`, verified above. The requirement it was provisioned against —
+`[redacted 2026-10-05: probe vantage IPv4]`, verified above. The requirement it was provisioned against —
 **any disposable VM with IPv6 egress in address space outside every Dotmac
 allowlist** — is kept here because it is the requirement any REPLACEMENT vantage
 must also meet, and because "we already have a host with IPv6" is the shortcut
@@ -773,7 +781,7 @@ table directly.
 
 ### CLOSES with the WORKSTATION vantage — the two things that are not reachability claims
 
-The workstation sits inside `160.119.124.0/22` and may not be used to claim
+The workstation sits inside `[redacted 2026-10-05: estate public /22]` and may not be used to claim
 reachability. It is still the right instrument for exactly two items, because
 neither is a claim about reachability:
 

@@ -402,7 +402,7 @@ approval_ref = "deployment.public-exposure"
 
 @pytest.mark.parametrize(
     "literal",
-    ["10.0.0.0/8", "192.168.1.10", "2001:db8::/32", "::1", "160.119.124.0/22"],
+    ["10.0.0.0/8", "192.168.1.10", "2001:db8::/32", "::1", "203.0.113.0/24"],
 )
 def test_a_source_set_that_is_an_address_literal_is_refused(literal: str) -> None:
     """Foundation renders and enforces; it never decides membership.
