@@ -321,6 +321,20 @@ claim.
   #231 (`6e9166d7`), #232 (`a88d9ff3`) and #234 (`bf1d1626`) also merged. These
   are source composition, not production adoption.
 
+**Two baseline rows above are stale at this observation.**
+
+- The 2026-09-20 table and gate 1 say `_do_restore_objects` overwrites the
+  roles attempt before adjudication. Starter #740
+  (`b0273cee`) fixed that: roles and objects now carry separate attempts, and
+  adjudication walks both.
+- Both executors no longer call `require_host_source(receipt=None)`. Since
+  #753 they take a required `admission_provider`. The only provider shipped is
+  `RefusingHostSourceAdmissionProvider`, and every CLI call site wires it, so
+  positive admission still needs an external assembly provider. That is a
+  repair of the call shape, not admission.
+
+The real ten-step recovery run and Lane 3's 16/16 remain open.
+
 ### Still open, as of 2026-10-05
 
 These are absences: dated, with a named refresh owner.
@@ -334,8 +348,17 @@ These are absences: dated, with a named refresh owner.
 | Starter Lane 3 vantage | Environments are still only `pypi-release` and `registry-release`. Variables are still only `LANE3_PROBE_HOST` and `RELEASE_RECORDER_CLIENT_ID`. `control-runner-starter-mt` is online and idle | Starter (this design), then Michael (provisioning) |
 | `retired_total` | 0 | Each product |
 
-**A new Gate-2 ordering constraint** comes from the Lane 3 design. Lane 3
-receipts must carry opaque identifiers instead of target and probe addresses,
-and must bind the producing run. Because that is a Foundation receipt-contract
-change, it must land in Foundation source before the Gate-2 freeze, or the
-candidate it ships in is spent.
+**A Gate-2 ordering constraint, in Foundation's receipt contract.** Any
+change below must land in Foundation source before the Gate-2 freeze, or the
+candidate it ships in is spent. `RehearsalReceipt.v1` cannot carry any of them:
+its schema is frozen against new fields because it has crossed five built
+wheels, so they need a `RehearsalReceipt.v2`.
+
+1. Gate item 9's middle term must be `ExecutionPlanDigestV1` (rule 49).
+   `build_receipt` currently forces the descriptor, authorization-document and
+   report digests to be equal, and `scripts/lane3_authorization.py` lists this
+   as an unrepaired Foundation precondition.
+2. Lane 3 receipts must carry opaque identifiers instead of target and probe
+   addresses, from the Lane 3 design.
+3. Lane 3 receipts must bind the GitHub run that produced them, also from the
+   Lane 3 design.
