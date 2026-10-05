@@ -164,6 +164,11 @@ jobs:
     # a rehearsal driven from anywhere else is driven by a different actor than
     # the one the receipt names.
     runs-on: [self-hosted, dotmac-control-runner]
+    # Defence in depth on main's own copy, not an access control: a branch can
+    # dispatch a modified copy of this file, which is why Lane 3 moves to an
+    # organization runner group restricted to one ref-pinned workflow
+    # (docs/LANE3_EXECUTION_TOPOLOGY.md).
+    if: github.ref == 'refs/heads/main'
     timeout-minutes: 60
     permissions:
       actions: read
