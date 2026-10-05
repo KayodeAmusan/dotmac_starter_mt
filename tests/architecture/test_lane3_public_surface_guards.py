@@ -267,9 +267,9 @@ def test_execution_tooling_carries_no_new_topology_literal() -> None:
 @pytest.mark.parametrize(
     ("text", "expected"),
     [
-        ("ssh 94.72.99.155", {"94.72.99.155"}),
-        ("vantage 10.120.120.54 22", {"10.120.120.54"}),
-        ("v6 2a02:c204:2353:7605::1 36088", {"2a02:c204:2353:7605::1"}),
+        ("ssh 8.8.4.4", {"8.8.4.4"}),
+        ("vantage 10.20.30.40 22", {"10.20.30.40"}),
+        ("v6 2606:4700:4700::1001 36088", {"2606:4700:4700::1001"}),
         ("bind 127.0.0.1 and ::1 and 0.0.0.0", set()),
         ("example 192.0.2.54 and 2001:db8:1::1", set()),
         ("version 1.2.3.4.5 and time 10:00:00 and sha256:abcd", set()),
@@ -278,9 +278,11 @@ def test_execution_tooling_carries_no_new_topology_literal() -> None:
 def test_the_address_scan_sees_real_addresses_and_ignores_safe_ones(
     text: str, expected: set[str]
 ) -> None:
-    """Sensitivity proof, in memory: the two real shapes this guard exists for
-    (a public vantage and an RFC 1918 target, both once committed here) are
-    caught, and the allowed forms are not."""
+    """Sensitivity proof, in memory: the shapes this guard exists for (a public
+    IPv4 vantage, an RFC 1918 target and a public IPv6 source, each once
+    committed here with real estate values) are caught, and the allowed forms
+    are not. The examples are well-known public resolvers and a generic private
+    address, never estate addresses."""
     assert address_literals(text) == expected
 
 
