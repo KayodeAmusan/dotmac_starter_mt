@@ -154,12 +154,15 @@ PRECONDITIONS: Final[tuple[Precondition, ...]] = (
             "its own docstring warns about."
         ),
         owner=(
-            "the Foundation (`rehearsal.py`) together with this lane's runner; "
-            "NOT repaired by this change"
+            "this lane's runner. The Foundation half is repaired: "
+            "`rehearsal.build_receipt_v2` checks item 9 as a chain over the "
+            "authorized plan, and the release gate reads only `RehearsalReceipt.v2`"
         ),
         evidence=(
-            "`build_receipt(require_same_digest)` forces the three terms equal, "
-            "so the middle term can only ever be the descriptor digest"
+            "the runner still emits a v1 receipt through `build_receipt`, whose "
+            "`require_same_digest` forces the three terms equal; it cannot call "
+            "`build_receipt_v2` until it drives `Executor` and holds the "
+            "authorized `FoundationExecutionPlanV3` and its `DeploymentOutcome`"
         ),
         observable=False,
     ),
