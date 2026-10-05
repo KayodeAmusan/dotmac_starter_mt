@@ -1,11 +1,11 @@
 # Forgejo private registry — standup runbook (dotmac-s3)
 
 Stands up Forgejo as Dotmac's authoritative private artifact registry on
-**dotmac-s3 (194.163.130.216)**, co-located with the existing MinIO, serving
+**dotmac-s3 ([redacted 2026-10-05: dotmac-s3 address; see Fleet])**, co-located with the existing MinIO, serving
 `https://registry.dotmac.io`. Supersedes the public-PyPI R0 decision (ADR-0005).
 
 **Access:** dotmac-s3 is reached by jumping from seabone
-(`ssh seabone 'ssh root@194.163.130.216 …'`) — seabone holds the authorized key.
+(`ssh seabone 'ssh root@<dotmac-s3 address, from Fleet> …'`) — seabone holds the authorized key.
 **Secrets:** every credential is generated on the host and stored in OpenBao;
 NEVER printed to a terminal transcript, logged, or committed. `.env` on the host
 is populated from OpenBao and is git-ignored.

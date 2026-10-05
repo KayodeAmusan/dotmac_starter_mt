@@ -1,5 +1,13 @@
 # `dotmac-deployment-foundation` — measurement provenance
 
+> **Addresses redacted 2026-10-05** at the owner's direction: this is a public
+> repository and these were live production estate addresses. Each redaction
+> names the address's ROLE. The role → address mapping, which keeps this record
+> checkable as evidence, is held privately in the Dotmac Knowledge record
+> `dotmac-estate-address-redaction-map-2026-10-05`. The original values remain
+> in this repository's public Git history; redaction does not withdraw them.
+
+
 **Record date:** 2026-09-05
 **Relocated from:** `packages/dotmac-deployment-foundation/src/dotmac_deployment_foundation/{lease,vantage}.py`
 **Reason:** the package is a reusable wheel; a host identity compiled into it
@@ -34,7 +42,7 @@ it. Neither module has such a fallback — `HostLease.target` is required and
 ## `lease.py` — `HostLease.v1`
 
 **Measured:** 2026-08-30
-**Host:** `85.190.246.211` (the shared rehearsal host)
+**Host:** `[redacted 2026-10-05: shared rehearsal host IPv4]` (the shared rehearsal host)
 **Finding:** `/var/lock` held `lvm/` and `subsys/` and nothing else. There was
 no lease mechanism at all, while eleven agents' worktrees and four agents'
 containers shared the host. "Exclusive lease" was a sentence in a plan.
@@ -42,7 +50,7 @@ containers shared the host. "Exclusive lease" was a sentence in a plan.
 ## `vantage.py` — `VantageQualification.v1`
 
 **Qualified:** 2026-08-29 · **Re-measured:** 2026-08-30
-**Candidate vantage:** `94.72.99.155`
+**Candidate vantage:** `[redacted 2026-10-05: probe vantage IPv4]`
 **Finding:** qualified as "outside every Dotmac allowlist" on three refusals and
 one positive control, then found to hold a second NIC — `eth1 10.0.0.4/22` —
 routing into the `idp-ha` private network. The refusals were real and the

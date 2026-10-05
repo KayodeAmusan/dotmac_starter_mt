@@ -225,7 +225,7 @@ def test_listener_isolation_and_direct_grants_are_explicit() -> None:
         PROXY,
         NFT,
         workloads,
-        (HostDirectEgressGrantV1("observer", "100.64.53.1/32", 8200, "tcp", "wg0"),),
+        (HostDirectEgressGrantV1("observer", "100.64.0.1/32", 8200, "tcp", "wg0"),),
     )
     assert (
         "meta skuid 2001 ip daddr 127.0.0.1 tcp dport { 3128, 3129 } accept"
@@ -237,7 +237,7 @@ def test_listener_isolation_and_direct_grants_are_explicit() -> None:
         '"runner starter cross-listener refused" reject' in bundle.nftables_conf
     )
     assert (
-        'meta skuid 2002 oifname "wg0" ip daddr 100.64.53.1/32 '
+        'meta skuid 2002 oifname "wg0" ip daddr 100.64.0.1/32 '
         "tcp dport 8200 accept" in bundle.nftables_conf
     )
     environments = {item.runner_name: item for item in bundle.runner_environments}
@@ -247,11 +247,11 @@ def test_listener_isolation_and_direct_grants_are_explicit() -> None:
     assert "127.0.0.1:3129" in workload_content
     assert environments["starter"].workload_sha256 is not None
     observer_environment = environments["observer"]
-    assert "no_proxy=100.64.53.1" in observer_environment.content
-    assert "NO_PROXY=100.64.53.1" in observer_environment.content
+    assert "no_proxy=100.64.0.1" in observer_environment.content
+    assert "NO_PROXY=100.64.0.1" in observer_environment.content
     assert observer_environment.workload_content is not None
-    assert "no_proxy=100.64.53.1" in observer_environment.workload_content
-    assert "NO_PROXY=100.64.53.1" in observer_environment.workload_content
+    assert "no_proxy=100.64.0.1" in observer_environment.workload_content
+    assert "NO_PROXY=100.64.0.1" in observer_environment.workload_content
     for content in (
         observer_environment.content,
         observer_environment.workload_content,
@@ -261,7 +261,7 @@ def test_listener_isolation_and_direct_grants_are_explicit() -> None:
             for line in content.splitlines()
             if line.startswith(("no_proxy=", "NO_PROXY="))
         ]
-        assert bypass_lines == ["no_proxy=100.64.53.1", "NO_PROXY=100.64.53.1"]
+        assert bypass_lines == ["no_proxy=100.64.0.1", "NO_PROXY=100.64.0.1"]
         assert all("transport.invalid" not in line for line in bypass_lines)
 
 
@@ -305,7 +305,7 @@ def test_every_local_identity_reaches_only_its_own_proxy_listeners() -> None:
 def test_direct_grant_interface_is_typed_and_optional() -> None:
     assert (
         HostDirectEgressGrantV1(
-            "observer", "100.64.53.1/32", 8200, "tcp", "wg0"
+            "observer", "100.64.0.1/32", 8200, "tcp", "wg0"
         ).output_interface
         == "wg0"
     )
@@ -313,9 +313,7 @@ def test_direct_grant_interface_is_typed_and_optional() -> None:
         HostDirectEgressGrantV1("starter", "192.0.2.1/32", 22).output_interface is None
     )
     with pytest.raises(ValueError, match="output interface"):
-        HostDirectEgressGrantV1(
-            "observer", "100.64.53.1/32", 8200, "tcp", "wg0; accept"
-        )
+        HostDirectEgressGrantV1("observer", "100.64.0.1/32", 8200, "tcp", "wg0; accept")
 
 
 @pytest.mark.parametrize(
@@ -348,7 +346,7 @@ def test_direct_grant_interface_is_typed_and_optional() -> None:
         (
             (HostRunnerIdentityV1("starter", 2001, 3128),),
             (),
-            (HostDirectEgressGrantV1("observer", "100.64.53.1/32", 8200),),
+            (HostDirectEgressGrantV1("observer", "100.64.0.1/32", 8200),),
             "unknown runner",
         ),
     ],
@@ -434,9 +432,7 @@ def test_surplus_workload_policy_and_unknown_direct_grant_refuse() -> None:
             identity,
             PROXY,
             NFT,
-            direct_grants=(
-                HostDirectEgressGrantV1("observer", "100.64.53.1/32", 8200),
-            ),
+            direct_grants=(HostDirectEgressGrantV1("observer", "100.64.0.1/32", 8200),),
         )
 
 

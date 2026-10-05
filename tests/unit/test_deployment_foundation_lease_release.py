@@ -73,7 +73,7 @@ AFTER = datetime(2026, 9, 4, 7, 0, tzinfo=UTC)
 
 def _lease(**over) -> HostLease:
     kwargs = {
-        "target": "10.120.120.54",
+        "target": "192.0.2.54",
         "holder": "deployment-foundation-rehearsal",
         "authorization_run_id": "33854964978",
         "starts_at": "2026-09-04T00:00:00Z",
@@ -365,7 +365,7 @@ def test_an_ADDRESS_is_refused_as_the_vm_identity() -> None:
     """The addresses are exactly what a destroy-and-restore can change, so an
     address binds by coincidence and could name a different machine afterwards."""
     with pytest.raises(SpecError) as exc:
-        _release(vm_slot="10.120.120.54")
+        _release(vm_slot="192.0.2.54")
     assert exc.value.code == RELEASE_MALFORMED
 
 

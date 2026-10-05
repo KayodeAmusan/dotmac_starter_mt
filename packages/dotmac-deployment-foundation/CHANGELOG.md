@@ -2,6 +2,44 @@
 
 ## Unreleased — successor not allocated
 
+### Added: `RehearsalReceipt.v2`, the Lane 3 receipt the release gate reads
+
+`RehearsalReceipt.v1` cannot carry gate item 9's middle term. `build_receipt`
+forces the descriptor, authorization-document and report digests to be equal,
+so its "authorized plan" was only ever the descriptor digest restated
+(`scripts/lane3_authorization.py`, precondition
+`middle_term_is_the_execution_plan_digest`). v1 has crossed five built
+candidate wheels, so it is not widened. The new schema is v2.
+
+`build_receipt_v2` checks item 9 as a chain: descriptor → plan → authorized
+`ExecutionPlanDigestV1` → the executed `DeploymentOutcome`'s copies of both.
+It takes the `FoundationExecutionPlanV3` itself, and takes the authorized
+digest only from the `ExecutionGrant` that `authorize_v3()` issued. A caller
+therefore cannot alter the plan and supply the altered plan's own digest. It
+also:
+- refuses an authorized plan digest equal to the descriptor digest (the
+  degenerate v1 shape);
+- requires the grant's descriptor and target to match the plan;
+- requires the plan's candidate wheel and controller fingerprint to be the
+  ones rehearsed;
+- requires the outcome's execution sequence and attempt to be the grant's,
+  and records the Control dispatch, so a replayed or foreign execution is
+  refused.
+
+From the Lane 3 organization-execution design (ADR-0070 amendment
+2026-10-05), it also:
+- records the plan's opaque `target_id` and `host_id` in place of addresses;
+- names the probe vantage by private-record reference;
+- binds the producing run (`ExecutionRunBindingV1`, checked by
+  `require_execution_run`).
+
+`scripts/require_rehearsal.py` now reads v2 only. **This must land before the
+Gate-2 freeze**, because the receipt contract ships in the candidate bytes.
+
+Not changed: the runner still emits v1 and refuses at qualification. Moving it
+to v2 needs the authorized plan and an `Executor` outcome (D4 / Gate 3). The
+oracle's run selection and its `require_execution_run` call are D-S2.
+
 ### Corrected: backup evidence origin for transition receipts
 
 `BackupRecord.evidence_origin` is a closed caller attestation with an

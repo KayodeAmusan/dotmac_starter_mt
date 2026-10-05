@@ -24,7 +24,7 @@ the verifier is shown to fail on it rather than merely to pass on a clean tree
 
 ## The privileged-vantage refusal
 
-The workstation sits inside `160.119.124.0/22`, which several of this fleet's
+The workstation sits inside `203.0.113.0/24`, which several of this fleet's
 allowlists explicitly ACCEPT. On 2026-08-29 two agents independently connected
 to "public" ports from it and each escalated a P0 that did not exist. The
 refusal is tested in both directions: a privileged vantage cannot conclude, and
@@ -409,7 +409,7 @@ def _probe(vantage: ProbeVantage) -> ProbeResult:
 def test_a_probe_from_inside_the_allowlist_cannot_prove_public_exposure() -> None:
     """The refusal that cost this programme two false P0 escalations.
 
-    The workstation's public address sits inside `160.119.124.0/22`, which
+    The workstation's public address sits inside `203.0.113.0/24`, which
     several allowlists ACCEPT. Both a coordinator and an agent independently
     connected and concluded "publicly exposed". The connection was real; the
     conclusion was not.

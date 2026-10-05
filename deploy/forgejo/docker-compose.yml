@@ -1,4 +1,4 @@
-# Forgejo private artifact registry — dotmac-s3 (194.163.130.216), co-located
+# Forgejo private artifact registry — dotmac-s3 ([redacted 2026-10-05: dotmac-s3 address; see Fleet]), co-located
 # with the existing MinIO. Deploy dir on the host: /opt/forgejo/.
 #
 # Three services on a private bridge network:

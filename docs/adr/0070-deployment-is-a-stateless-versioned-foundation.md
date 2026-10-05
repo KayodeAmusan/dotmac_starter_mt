@@ -985,3 +985,62 @@ inputs and CI conformance are not proof that its deployment executor has been
 replaced. This amendment records ordering only. It does not claim either
 product has completed executor cutover, production adoption or retirement of
 its prior execution path.
+
+## Amendment — 2026-10-05: Lane 3 executes from organization-owned, workflow-restricted, ephemeral runners
+
+**Decision (Michael Ayoade, 2026-10-05).** Lane 3 leaves the personal-account
+Starter repository's self-hosted runner. It runs from an organization-owned
+execution repository, through a runner group restricted to that repository and
+to one ref-pinned workflow, behind a protected Environment, on ephemeral
+just-in-time runners. Topology and credentials are delivered privately at run
+time. Static Lane 3 credentials and the personal runner are retired. The
+rehearsal oracle that `release-facility.yml` reads is amended to match. The
+design, its proposed coordinates and its admission evidence are in
+[`docs/LANE3_EXECUTION_TOPOLOGY.md`](../LANE3_EXECUTION_TOPOLOGY.md).
+
+**Why.** Starter is a public, personal-account repository. A runner label
+routes a job but does not restrict which workflow may use the runner, and
+workflow-restricted runner groups exist only for organizations. A public
+repository's variables, dispatch inputs, logs and artifacts are public. The
+current lane therefore cannot hold private vantage topology or static keys on
+its runner, which is the unresolved private-delivery row that Platform CP's
+Gate-0 D spec (§ 8) assigns to Starter/Foundation infrastructure under CP
+ADR-0013 § A7.6. The public GitHub Free topology that CP adopted for Gate 0
+(spec § 11) is the precedent. Lane 3 mirrors it with a **separate** group, CA
+and base image, because Gate 0 is forbidden to connect to a target and Lane 3
+exists to do so.
+
+**What does not change.** Lane 3 still executes the digest-verified candidate
+wheel resolved from the committed `CandidateArtifact.v1` (rule 44). The
+launcher runs an exact Starter protected-`main` revision's own runner, never a
+copy. Publication still requires two oracles, newest-then-check selection,
+sixteen `executed_passed` rows and the existing three-revision ancestry
+ruling. No `ExecutionGrant` is created, widened or substituted by this
+topology (rule 51).
+
+**What changes when D-S2 lands, and not before.**
+- The run population becomes the pinned execution workflow's
+  `workflow_dispatch` runs on `main`, identified by an immutable repository ID
+  checked into Starter.
+- The Starter revision is tied to a run through a dispatch grammar that the
+  launcher refuses before checkout, and bound by the receipt's
+  `foundation_revision` from the launcher's verified checkout.
+- The selected run's launcher revision, runner group and Environment approval
+  are checked.
+- The receipt is fetched from exactly that run and must bind that run's
+  identity.
+
+Until the admission evidence exists, the amended oracle refuses. `AGENTS.md`
+rule 44's statement that the Starter run's `head_sha` is the protected-main
+oracle is amended in that same change.
+
+**A Foundation prerequisite this creates.** Receipts must carry opaque
+identifiers instead of target and probe addresses, and must bind the
+producing run. That is a change to Foundation's receipt contract, so it must
+land in Foundation source **before the Gate-2 freeze** (rule 48). Foundation
+chooses an additive v1 field or a v2 schema.
+
+**Not decided here.** Provisioning values and their approval, Gate-3
+controller-fingerprint issuance, binding certificate issuance to a Control
+lease, and the four Lane 3 runner fixes (D4) are not decided here. This
+amendment closes neither Packet D nor any gate.

@@ -250,3 +250,154 @@ dispatch, key creation, OpenBao read, or secret value observed):
 These are gate-1 preconditions this roadmap already listed as open ("prepares
 a protected, real ten-step recovery and Lane 3 runner"); this update dates
 and confirms them rather than changing what gate 1 requires.
+
+## Update, 2026-10-05 — Packet D moved out of Starter; Starter's share is Lane 3 private delivery
+
+**This is a dated observation, not a rewrite of the plan.** The gate table,
+the 2026-09-24 numbering reconciliation and the packet ownership above stand,
+except where this section names a correction. Re-verify every coordinate
+before acting.
+
+### Refreshed baseline
+
+| Repository | `main` at this observation |
+| --- | --- |
+| Starter | `e066dd07671a96e5adf1740e8073e90573f3963e` |
+| Platform CP | `bf1d16265be638eac2fc63583d60f5e1f3248529` (#234) |
+| `dotmac_deployment_control` | `ad95f4e1ef2bc454450ffc1f59a8d6f090b32431` (release record #74) |
+| `dotmac-tech/gate0-issuer-execution` | `453ad4db44d0fe9ddf94748cd1fa124cdcc2d680` |
+
+### Correction: Packet D's protected workflow is not Starter's
+
+The 2026-09-24 table above assigns **D. Protected workflow** to the "Starter
+protected-workflow owner". Michael's 2026-09-30 ruling on public GitHub Free
+superseded that placement. It is recorded as § 11 of CP
+`docs/design/gate0-d-implementation-spec.md` (CP #229, merged
+`6f5efe2176e25477816f24e6762d5ce9e9fb34ed`). The protected Gate-0 workflow,
+Environment and runner group live in the public, organization-owned
+`dotmac-tech/gate0-issuer-execution` (repository ID `1397614140`, organization
+ID `335992433`). Platform CP keeps the operator-workflow and readiness-receipt
+ownership (§ A7.6–A7.7).
+
+**The one D item that remains Starter's** is the spec's § 8 row "design and
+verify private delivery of observer, jump and inside-vantage configuration
+through Starter/Foundation infrastructure" (ADR-0013 § A7.6). On 2026-10-05
+Michael chose organization-owned Lane 3 execution for it: a dedicated
+workflow-restricted runner group, a protected Environment, ephemeral runners,
+an amended rehearsal oracle, and retirement of `control-runner-starter-mt` and
+its static credentials. The design is
+[`docs/LANE3_EXECUTION_TOPOLOGY.md`](LANE3_EXECUTION_TOPOLOGY.md), recorded by
+the ADR-0070 amendment of 2026-10-05. Its source work (D-S2 workflow and
+oracle, D-S3 guards) stays fail-closed until provisioning and the negative
+proofs are recorded. The four Lane 3 runner fixes in
+`docs/inventories/lane3-acceptance-criteria.md` are tracked separately (D4)
+and are not part of D.
+
+### What closed since 2026-09-24
+
+Positive coordinates only. Each is a merge, run or peeled tag, not a status
+claim.
+
+- **Packet A and CP ADR-0013 A6.** § A7 was ratified 2026-09-24; the full A6
+  amendment, including A6.4, was ratified 2026-09-25 (recorded in Starter
+  #748, #749).
+- **Packet C1, source.** Starter #753 merged as
+  `cb2d9f8983f7bb40141540a0490731320bca0fe3` (V3 execution authority and
+  unified host admission). Starter #761 merged as
+  `adf8632d1a09d6bd1c430e0e4069bb6c48d5d81b` (Foundation transition-receipt
+  verifier). **Both are unreleased**: no Foundation successor exists.
+- **Packet D public topology.** Execution repository refusal-only PR #1 was
+  merged as `f218660b6ff7c3a01b877e6ab080efcd31672805`. The bounded
+  scheduling-and-teardown subgate completed 2026-10-01: in protected run
+  `36858977107`, Michael approved the Environment, the job was assigned to the
+  `gate0-issuer-protected` group, and the intended refusal step executed. The
+  six historical negative fixtures were re-run first and their eleven jobs
+  never received a runner. The disposable canary was removed afterwards.
+  **No privileged runner was attached.**
+- **Control and CP source composition.** `dotmac-deployment-control`
+  `0.1.0a17` is tagged `dotmac-deployment-control-v0.1.0a17`, peeling to
+  `574418944d35ddf3559d17e59e9184b5f545ebe4`. CP #233 adopted it at source
+  level (`40e9fddf6a586b511bb73116696b463423448ef1`). CP #217 (`d598aa0e`),
+  #231 (`6e9166d7`), #232 (`a88d9ff3`) and #234 (`bf1d1626`) also merged. These
+  are source composition, not production adoption.
+
+**Two baseline rows above are stale at this observation.**
+
+- The 2026-09-20 table and gate 1 say `_do_restore_objects` overwrites the
+  roles attempt before adjudication. Starter #740
+  (`b0273cee`) fixed that: roles and objects now carry separate attempts, and
+  adjudication walks both.
+- Both executors no longer call `require_host_source(receipt=None)`. Since
+  #753 they take a required `admission_provider`. The only provider shipped is
+  `RefusingHostSourceAdmissionProvider`, and every CLI call site wires it, so
+  positive admission still needs an external assembly provider. That is a
+  repair of the call shape, not admission.
+
+The real ten-step recovery run and Lane 3's 16/16 remain open.
+
+### Still open, as of 2026-10-05
+
+These are absences: dated, with a named refresh owner.
+
+| Item | State | Refresh owner |
+| --- | --- | --- |
+| Gate-0 D credential-bearing provisioning (OpenBao JWT role, issuer and attester signers, trust state, SSH CA, privileged runner) | Not provisioned | Michael |
+| Gate-0 E readiness receipt | Not started | Platform CP |
+| Gate 2 (allocate `0.4.0a2`) | Not started. `packages/dotmac-deployment-foundation/pyproject.toml` still declares spent `0.4.0a1` | Starter release captain |
+| Lane 3 | 0/16 `executed_passed`. No receipt has ever been produced | Foundation / Lane 3 runner owner (D4) |
+| Starter Lane 3 vantage | Environments are still only `pypi-release` and `registry-release`. Variables are still only `LANE3_PROBE_HOST` and `RELEASE_RECORDER_CLIENT_ID`. `control-runner-starter-mt` is online and idle | Starter (this design), then Michael (provisioning) |
+| `retired_total` | 0 | Each product |
+
+**A Gate-2 ordering constraint, in Foundation's receipt contract.** Any
+change below must land in Foundation source before the Gate-2 freeze, or the
+candidate it ships in is spent. `RehearsalReceipt.v1` cannot carry any of them:
+its schema is frozen against new fields because it has crossed five built
+wheels, so they need a `RehearsalReceipt.v2`.
+
+1. Gate item 9's middle term must be `ExecutionPlanDigestV1` (rule 49).
+   `build_receipt` currently forces the descriptor, authorization-document and
+   report digests to be equal, and `scripts/lane3_authorization.py` lists this
+   as an unrepaired Foundation precondition.
+2. Lane 3 receipts must carry opaque identifiers instead of target and probe
+   addresses, from the Lane 3 design.
+3. Lane 3 receipts must bind the GitHub run that produced them, also from the
+   Lane 3 design.
+
+### The freeze boundary: what each change costs after Gate 2
+
+The candidate, the release revision and the execution tooling are three
+different things. They are bound by three different checks, so a change
+after the freeze costs one of three different prices.
+
+| Layer | What it is | Bound by | Changing it after the Gate-2 freeze… |
+| --- | --- | --- | --- |
+| **Candidate bytes** | `packages/dotmac-deployment-foundation/src/` and the version its metadata declares, built once into the recorded wheel and sdist | The candidate-window guard compares the `src/` **tree object** with the recorded `source_sha` (rule 50). The receipt and the plan bind the wheel digest | **spends the candidate.** It needs a `CandidateDisposition.v1`, a new version and a new build (rules 44, 48) |
+| **Release revision** | The Starter protected-`main` commit that publishes | `verify_publication` requires the receipt's runner revision to **equal** it. Candidate source must be an ancestor of both (ruling 4, `release_facility.py verify-revisions`) | **voids the authoritative rehearsal, not the candidate.** Any Starter commit after the Gate-3 rehearsal means re-rehearsing the same bytes at the new commit, inside the rule 32 freeze |
+| **Execution tooling** | `scripts/` (runner, oracle, collectors), `.github/`, the organization launcher repository, provisioned configuration | The runner revision in the receipt. The launcher revision admitted in `.github/lane3-execution.json` (D-S2). Live read-backs | **costs nothing to the candidate.** It moves the release revision (row 2) or the admitted launcher revision, so the rehearsal must run after it lands |
+
+**Placement of open work:**
+
+- **Before the freeze, because it is candidate bytes:** `RehearsalReceipt.v2`
+  (#770). Also any Foundation API that D4 or CP's Gate-3 composition turns out
+  to need.
+- **Must be answered before allocating `0.4.0a2`:**
+  1. Can the D4 rollback provocation (item 8) and apply-under-lock (item 1)
+     drive the existing public `Executor` from outside the package? Or do they
+     need a Foundation entry point?
+  2. Does CP's Gate-3 composition construct both executors with its own
+     admission provider, as `host_source_admission.py` intends? The frozen
+     CLI ships only `RefusingHostSourceAdmissionProvider`.
+
+  A "needs Foundation change" answer to either moves that change before the
+  freeze.
+- **After the freeze if they touch no candidate bytes, and before the
+  authoritative Gate-3 rehearsal:** D-S2 (oracle, launcher), D-S3 (guards)
+  and D4's runner-side fixes. Each lands, and the rehearsal then runs at the
+  resulting release revision.
+- **Must exist before a complete Gate-3 receipt can be claimed, wherever it
+  lands:** D4's rollback provocation and measured service state.
+
+**#770 establishes the receipt contract; it does not establish rehearsal
+readiness.** The cutover blocker closes only when the producer, private
+delivery, runner capability and protected execution can all satisfy that
+contract.

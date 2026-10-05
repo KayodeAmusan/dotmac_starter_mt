@@ -6,7 +6,7 @@ import os
 import uuid
 from collections.abc import Iterator
 from concurrent.futures import ThreadPoolExecutor
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from threading import Barrier
 
@@ -1130,7 +1130,13 @@ _START = datetime(2026, 9, 1, tzinfo=UTC)
 _END = datetime(2026, 10, 1, tzinfo=UTC)
 
 
-def _approve(conn, tenant_id: uuid.UUID, ids: dict[str, uuid.UUID]) -> uuid.UUID:
+def _approve(
+    conn,
+    tenant_id: uuid.UUID,
+    ids: dict[str, uuid.UUID],
+    *,
+    end: datetime = _END,
+) -> uuid.UUID:
     arrangement_id = uuid.uuid4()
     conn.execute(
         text(_ARRANGEMENT_INSERT),
@@ -1143,7 +1149,7 @@ def _approve(conn, tenant_id: uuid.UUID, ids: dict[str, uuid.UUID]) -> uuid.UUID
             "key": ids["line_key"],
             "treatment": "complimentary",
             "start": _START,
-            "end": _END,
+            "end": end,
             "idempotency": f"arr-{uuid.uuid4().hex}",
             "fingerprint": _SEED_ARRANGEMENT_FINGERPRINT,
         },
@@ -1438,7 +1444,14 @@ def test_commercial_terms_cannot_change_while_a_treatment_is_open(
     ids = _seed_tenant_line(admin_url, left)
     engine = create_engine(admin_url, isolation_level="AUTOCOMMIT")
     with engine.connect() as conn:
-        arrangement_id = _approve(conn, left, ids)
+        # OPEN relative to the database clock, not to a calendar date. The
+        # trigger protects only an active arrangement whose `ends_at` is after
+        # CURRENT_TIMESTAMP, so the shared fixed window (`_END` = 2026-10-01)
+        # made this test pass until that date and fail after it, on every
+        # branch, with no code change. Grants elsewhere keep the fixed window.
+        arrangement_id = _approve(
+            conn, left, ids, end=datetime.now(UTC) + timedelta(days=365)
+        )
         with pytest.raises(DBAPIError, match="revoke the open billing treatment"):
             conn.execute(
                 text(_NEXT_CONTRACT_VERSION_INSERT),
