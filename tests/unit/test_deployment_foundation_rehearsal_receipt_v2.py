@@ -50,7 +50,7 @@ from dotmac_deployment_foundation.rehearsal import (
 )
 from dotmac_deployment_foundation.spec import ProductDeploymentSpec
 
-from tests.unit.foundation_v3_support import CONTROLLER, WHEEL, v3_plan
+from tests.unit.foundation_v3_support import CONTROLLER, WHEEL, grant_for_plan, v3_plan
 
 REVISION = "c" * 40
 FIXTURE = "sha256:" + "d" * 64
@@ -75,6 +75,7 @@ def _results(**overrides: RequirementStatus) -> list[RequirementResult]:
 class Subject:
     descriptor_digest: str
     plan: FoundationExecutionPlanV3
+    grant: Any
     outcome: DeploymentOutcome
 
 
@@ -97,13 +98,18 @@ def subject(tmp_path: Path) -> Subject:
             application_profile_digest="",
         )
     )
+    grant = grant_for_plan(spec, plan)
     outcome = DeploymentOutcome(
         plan=steps,
         succeeded=True,
         execution_plan_digest=plan.digest(),
         descriptor_digest=descriptor_digest,
+        execution_sequence=grant.execution_sequence,
+        attempt_no=grant.attempt_no,
     )
-    return Subject(descriptor_digest=descriptor_digest, plan=plan, outcome=outcome)
+    return Subject(
+        descriptor_digest=descriptor_digest, plan=plan, grant=grant, outcome=outcome
+    )
 
 
 def _build(subject: Subject, **overrides: Any) -> RehearsalReceiptV2:
@@ -112,7 +118,7 @@ def _build(subject: Subject, **overrides: Any) -> RehearsalReceiptV2:
         "foundation_artifact_digest": WHEEL,
         "descriptor_digest": subject.descriptor_digest,
         "execution_plan": subject.plan,
-        "authorized_execution_plan_digest": subject.plan.digest(),
+        "grant": subject.grant,
         "execution_outcome": subject.outcome,
         "fixture_digest": FIXTURE,
         "evidence_bundle_digest": BUNDLE,
@@ -160,14 +166,71 @@ def test_identity_comes_from_the_plan_not_the_caller(subject: Subject) -> None:
 
 
 def test_the_degenerate_v1_shape_is_refused(subject: Subject) -> None:
-    """The authorized plan digest restated as the descriptor digest."""
+    """The authorized plan digest restated as the descriptor digest.
+
+    Planted with `dataclasses.replace`, which carries the issued witness: the
+    grant guard is in-process code trust (ADR-0070, 2026-09-25), not a
+    cryptographic boundary, so the receipt re-checks rather than assumes.
+    """
+    forged = dataclasses.replace(
+        subject.grant, execution_plan_digest=subject.descriptor_digest
+    )
     with pytest.raises(SpecError, match="degenerate v1 shape"):
-        _build(subject, authorized_execution_plan_digest=subject.descriptor_digest)
+        _build(subject, grant=forged)
 
 
-def test_a_plan_other_than_the_authorized_one_is_refused(subject: Subject) -> None:
+def test_an_altered_plan_is_refused_against_the_frozen_digest(
+    subject: Subject,
+) -> None:
+    """The case a caller-supplied digest could not catch: alter the plan, and
+    the digest Control froze no longer matches it."""
+    altered = dataclasses.replace(subject.plan, host_id="fleet-host-2")
+    assert altered.digest() != subject.grant.execution_plan_digest
     with pytest.raises(SpecError, match="Only the plan Control froze"):
-        _build(subject, authorized_execution_plan_digest="sha256:" + "e" * 64)
+        _build(subject, execution_plan=altered)
+
+
+@pytest.mark.parametrize(
+    "stand_in", ["sha256:" + "e" * 64, {"execution_plan_digest": "sha256:" + "e" * 64}]
+)
+def test_only_an_issued_grant_carries_the_authorized_digest(
+    subject: Subject, stand_in: object
+) -> None:
+    with pytest.raises(SpecError, match="takes the ExecutionGrant"):
+        _build(subject, grant=stand_in)
+
+
+def test_a_grant_for_another_descriptor_is_refused(subject: Subject) -> None:
+    forged = dataclasses.replace(subject.grant, descriptor_digest="sha256:" + "3" * 64)
+    with pytest.raises(SpecError, match="the grant authorizes descriptor"):
+        _build(subject, grant=forged)
+
+
+def test_a_grant_for_another_target_is_refused(subject: Subject) -> None:
+    forged = dataclasses.replace(subject.grant, target="another-target")
+    with pytest.raises(SpecError, match="another target"):
+        _build(subject, grant=forged)
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [("execution_sequence", 8), ("attempt_no", 2), ("attempt_no", 0)],
+)
+def test_an_outcome_of_another_dispatch_or_a_replay_is_refused(
+    subject: Subject, field: str, value: int
+) -> None:
+    replayed = dataclasses.replace(subject.outcome, **{field: value})
+    with pytest.raises(SpecError, match="another dispatch, or a replay"):
+        _build(subject, execution_outcome=replayed)
+
+
+def test_the_receipt_names_the_dispatch_it_executed(subject: Subject) -> None:
+    dispatch = _build(subject).content["control_dispatch"]
+    assert dispatch == {
+        "dispatch_id": subject.grant.receipt.dispatch_id,
+        "execution_sequence": subject.grant.execution_sequence,
+        "attempt_no": subject.grant.attempt_no,
+    }
 
 
 def test_a_plan_rendered_from_another_descriptor_is_refused(subject: Subject) -> None:
@@ -229,9 +292,7 @@ def test_a_rehearsal_driven_by_another_controller_is_refused(
 def test_an_ip_literal_host_id_is_refused(subject: Subject, address: str) -> None:
     plan = dataclasses.replace(subject.plan, host_id=address)
     with pytest.raises(SpecError, match="is an IP address"):
-        _build(
-            subject, execution_plan=plan, authorized_execution_plan_digest=plan.digest()
-        )
+        _build(subject, execution_plan=plan)
 
 
 @pytest.mark.parametrize(
@@ -299,6 +360,11 @@ def test_a_v1_receipt_cannot_be_tied_to_a_run(subject: Subject) -> None:
         (lambda c: c.__setitem__("host_id", "203.0.113.10"), "is an IP address"),
         (lambda c: c.__setitem__("probe_vantage_ref", "198.51.100.7"), "record-key"),
         (lambda c: c["results"].pop(), "omits"),
+        (lambda c: c["control_dispatch"].pop("dispatch_id"), "control_dispatch"),
+        (
+            lambda c: c["control_dispatch"].__setitem__("attempt_no", 0),
+            "positive integer",
+        ),
         (lambda c: c["results"].append(dict(c["results"][0])), "appears twice"),
     ],
 )
