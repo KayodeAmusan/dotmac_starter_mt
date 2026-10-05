@@ -57,19 +57,45 @@ Fails CLOSED on every ambiguity: a transport error, an unparseable body, zero
 runs, a run still in progress, any conclusion other than `success`, and any
 `head_sha` mismatch. There is deliberately no `--allow-missing` escape hatch;
 the way to publish without a rehearsal is to run the rehearsal.
+
+Organization execution — amended 2026-10-05 (ADR-0070)
+------------------------------------------------------
+Lane 3 no longer runs in this public, personal-account repository. The runs
+read are those of ONE workflow in ONE organization repository, pinned by
+immutable IDs in `.github/lane3-execution.json` (`lane3_execution.py`). Each
+run's title names the Starter revision it rehearsed, in the launcher's dispatch
+grammar. `select_runs` projects that revision into `head_sha`, so `decide`
+keeps its newest-then-check semantics unchanged. Three facts are then
+required of the selected run, each from its own API:
+- its launcher commit is admitted;
+- every job ran on the pinned runner group;
+- the expected reviewer approved its Environment.
+
+The receipt is downloaded by THIS process from THAT run. It must be a
+`RehearsalReceipt.v2` bound to that run's repository ID, run ID and attempt
+(`require_execution_run`). While the topology file records no admitted
+surface, every call refuses (docs/LANE3_EXECUTION_TOPOLOGY.md § 9).
 """
 
 from __future__ import annotations
 
 import argparse
+import io
 import json
 import os
 import pathlib
 import sys
 import urllib.error
 import urllib.request
+import zipfile
 from datetime import UTC, datetime
 from typing import Any
+
+# Launched `-E -P` by the release job, which removes this file's own directory
+# from `sys.path`; put it back explicitly so the `lane3_execution` sibling
+# resolves to THIS checkout's copy and nothing ambient.
+_ROOT = pathlib.Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
 
 EXIT_OK = 0
 EXIT_REFUSED = 1
@@ -174,62 +200,164 @@ def decide(runs: list[dict[str, Any]], sha: str) -> dict[str, Any]:
     }
 
 
-def _fetch(repo: str, workflow: str, sha: str, token: str) -> list[dict[str, Any]]:
-    url = (
-        f"{API_ROOT}/repos/{repo}/actions/workflows/{workflow}/runs"
-        f"?head_sha={sha}&per_page=100"
-    )
+def _fetch(url: str, token: str) -> Any:
+    """GET one API resource, or a refusal. Never an exception type by accident."""
     request = urllib.request.Request(url)  # noqa: S310 - fixed https API root
     request.add_header("Accept", "application/vnd.github+json")
     request.add_header("X-GitHub-Api-Version", "2022-11-28")
     if token:
         request.add_header("Authorization", f"Bearer {token}")
     try:
-        with urllib.request.urlopen(request, timeout=30) as response:  # noqa: S310
-            body = json.loads(response.read().decode("utf-8"))
+        with urllib.request.urlopen(request, timeout=60) as response:  # noqa: S310
+            body = response.read()
+        return json.loads(body.decode("utf-8"))
     except urllib.error.HTTPError as exc:  # fail closed, loudly
         raise RehearsalMissing(
-            f"the rehearsal oracle is unreachable (HTTP {exc.code} for {workflow}). "
+            f"the rehearsal oracle is unreachable (HTTP {exc.code} for {url}). "
             "Refusing to publish: an oracle that cannot be read has not said yes"
         ) from exc
     except (urllib.error.URLError, TimeoutError, ValueError) as exc:
         raise RehearsalMissing(
             f"the rehearsal oracle could not be read ({exc}). Refusing to publish"
         ) from exc
-    runs = body.get("workflow_runs")
-    if not isinstance(runs, list):
+
+
+class _NoRedirect(urllib.request.HTTPRedirectHandler):
+    """Surface a redirect instead of following it with the caller's headers."""
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):  # type: ignore[no-untyped-def]
+        return None
+
+
+def _download(url: str, token: str) -> bytes:
+    """An artifact archive, following its ONE redirect WITHOUT the token.
+
+    GitHub answers an artifact download with a redirect to a pre-signed storage
+    URL. `urllib` would follow it carrying the `Authorization` header, which the
+    storage host rejects and which hands the token to a third party. So the
+    redirect is taken by hand and the signed URL fetched with no credential.
+    """
+    request = urllib.request.Request(url)  # noqa: S310 - fixed https API root
+    request.add_header("Accept", "application/vnd.github+json")
+    request.add_header("X-GitHub-Api-Version", "2022-11-28")
+    if token:
+        request.add_header("Authorization", f"Bearer {token}")
+    opener = urllib.request.build_opener(_NoRedirect)
+    try:
+        with opener.open(request, timeout=60) as response:
+            return response.read()
+    except urllib.error.HTTPError as exc:
+        location = exc.headers.get("Location") if exc.code in (301, 302, 307) else None
+        if not location or not location.startswith("https://"):
+            raise RehearsalMissing(
+                f"the receipt artifact could not be downloaded (HTTP {exc.code})"
+            ) from exc
+    except (urllib.error.URLError, TimeoutError) as exc:
         raise RehearsalMissing(
-            "the rehearsal oracle returned no `workflow_runs` array; refusing to "
-            "treat an unrecognised response as approval"
+            f"the receipt artifact could not be read ({exc})"
+        ) from exc
+    try:
+        with urllib.request.urlopen(location, timeout=60) as response:  # noqa: S310
+            return response.read()
+    except (urllib.error.URLError, TimeoutError) as exc:
+        raise RehearsalMissing(
+            f"the receipt artifact's signed URL could not be read ({exc})"
+        ) from exc
+
+
+def _list(url: str, key: str, token: str) -> list[dict[str, Any]]:
+    """Every page of a listing, or a refusal. A partial listing is not a listing.
+
+    ``total_count`` is compared with what was collected: a listing that changed
+    or truncated while being read could have dropped exactly the newest run.
+    """
+    collected: list[dict[str, Any]] = []
+    total: Any = None
+    page = 1
+    while True:
+        separator = "&" if "?" in url else "?"
+        body = _fetch(f"{url}{separator}per_page=100&page={page}", token)
+        items = body.get(key) if isinstance(body, dict) else None
+        if not isinstance(items, list):
+            raise RehearsalMissing(
+                f"the rehearsal oracle returned no `{key}` array; refusing to "
+                "treat an unrecognised response as approval"
+            )
+        if total is None:
+            total = body.get("total_count")
+        collected.extend(items)
+        if len(items) < 100:
+            break
+        page += 1
+    if not isinstance(total, int) or total != len(collected):
+        raise RehearsalMissing(
+            f"the oracle reported {total!r} {key} and {len(collected)} were read. "
+            "An incomplete listing may have dropped the newest run"
         )
-    return runs
+    return collected
+
+
+def _receipt_bytes(repo: str, run_id: int, artifact: str, token: str) -> bytes:
+    """The receipt from EXACTLY the selected run's one artifact named ``artifact``.
+
+    Fetched here rather than by an earlier workflow step, so the run whose
+    receipt is read is the run that was selected — nothing can land between a
+    selection and a separate download. More than one artifact of that name is
+    refused as ambiguous; the receipt's own run binding then refuses one taken
+    from an earlier attempt.
+    """
+    listed = _list(
+        f"{API_ROOT}/repos/{repo}/actions/runs/{run_id}/artifacts?name={artifact}",
+        "artifacts",
+        token,
+    )
+    if len(listed) != 1 or listed[0].get("expired"):
+        raise RehearsalMissing(
+            f"execution run {run_id} carries {len(listed)} artifact(s) named "
+            f"{artifact!r} (or it expired). Exactly one live receipt is required"
+        )
+    archive = _download(
+        f"{API_ROOT}/repos/{repo}/actions/artifacts/{listed[0]['id']}/zip", token
+    )
+    try:
+        with zipfile.ZipFile(io.BytesIO(archive)) as bundle:
+            return bundle.read("receipt.json")
+    except (zipfile.BadZipFile, KeyError) as exc:
+        raise RehearsalMissing(
+            f"the receipt artifact of execution run {run_id} has no readable "
+            f"receipt.json ({exc})"
+        ) from exc
 
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         prog="require_rehearsal.py",
         description=(
-            "Fail unless a disposable-host rehearsal succeeded on the exact SHA."
+            "Fail unless the pinned Lane 3 execution workflow rehearsed the exact "
+            "SHA and published a passing RehearsalReceipt.v2 for these bytes."
         ),
     )
     parser.add_argument("sha", help="the full 40-character commit under release")
     parser.add_argument(
         "--repo",
         default=os.environ.get("GITHUB_REPOSITORY", ""),
-        help="owner/name; defaults to $GITHUB_REPOSITORY",
+        help=(
+            "owner/name of THIS repository; must equal the topology's "
+            "starter_repository, so a topology copied from elsewhere refuses"
+        ),
     )
     parser.add_argument(
-        "--workflow",
-        default="exposure-rehearsal.yml",
-        help="the LANE 3 rehearsal workflow file name",
+        "--topology",
+        default=str(_ROOT / ".github" / "lane3-execution.json"),
+        help="the checked-in Lane3ExecutionTopology.v1",
     )
     parser.add_argument(
-        "--receipt",
+        "--receipt-out",
         required=True,
         help=(
-            "path to the RehearsalReceipt.v1 the rehearsal run published. "
-            "Required: a green run says a job exited 0, and only the receipt "
-            "says what it established"
+            "where to write the receipt read from the selected run, for the "
+            "record. It is read by THIS process from the run it selected, never "
+            "supplied by the caller"
         ),
     )
     # REQUIRED, and that is the whole design. The receipt says what a run
@@ -248,15 +376,60 @@ def main(argv: list[str] | None = None) -> int:
         ),
     )
     args = parser.parse_args(argv)
-
     if not args.repo:
         print("error: --repo (or $GITHUB_REPOSITORY) is required", file=sys.stderr)
         return EXIT_USAGE
-
     token = os.environ.get("GITHUB_TOKEN", "")
+
+    from lane3_execution import (
+        ExecutionRunRefused,
+        TopologyRefused,
+        load_topology,
+        require_run_context,
+        select_runs,
+    )
+
     try:
-        proof = decide(_fetch(args.repo, args.workflow, args.sha, token), args.sha)
-    except RehearsalMissing as exc:
+        topology = load_topology(pathlib.Path(args.topology))
+        if topology.starter_repository != args.repo:
+            raise TopologyRefused(
+                f"the topology is for {topology.starter_repository}, and this is "
+                f"{args.repo}"
+            )
+        repo = topology.execution_repository
+        workflow = pathlib.PurePosixPath(topology.workflow_path).name
+        runs = _list(
+            f"{API_ROOT}/repos/{repo}/actions/workflows/{workflow}/runs"
+            "?event=workflow_dispatch&branch=main",
+            "workflow_runs",
+            token,
+        )
+        candidates = select_runs(runs, sha=args.sha, topology=topology)
+        proof = decide(candidates, args.sha)
+        selected = next(run for run in candidates if run.get("id") == proof["run_id"])
+        attempt = selected.get("run_attempt")
+        if isinstance(attempt, bool) or not isinstance(attempt, int) or attempt < 1:
+            raise RehearsalMissing(
+                f"execution run {proof['run_id']} reports no usable run_attempt "
+                f"({attempt!r}); the receipt's run binding cannot be checked"
+            )
+        jobs = _list(
+            f"{API_ROOT}/repos/{repo}/actions/runs/{proof['run_id']}"
+            f"/attempts/{attempt}/jobs",
+            "jobs",
+            token,
+        )
+        approvals = _fetch(
+            f"{API_ROOT}/repos/{repo}/actions/runs/{proof['run_id']}/approvals",
+            token,
+        )
+        if not isinstance(approvals, list):
+            raise RehearsalMissing("the approvals oracle returned no array")
+        require_run_context(selected, jobs=jobs, approvals=approvals, topology=topology)
+        receipt_bytes = _receipt_bytes(
+            repo, proof["run_id"], topology.receipt_artifact, token
+        )
+    except (RehearsalMissing, TopologyRefused, ExecutionRunRefused) as exc:
         print(f"REFUSED: {exc}", file=sys.stderr)
         return EXIT_REFUSED
 
@@ -267,45 +440,45 @@ def main(argv: list[str] | None = None) -> int:
     # validate a different contract from the bytes it later publishes.
     from dotmac_deployment_foundation.errors import SpecError
     from dotmac_deployment_foundation.rehearsal import (
+        ExecutionRunBindingV1,
         RehearsalReceiptV2,
+        require_execution_run,
         require_rehearsed_artifact,
         verify_publication,
     )
 
-    receipt_path = pathlib.Path(args.receipt)
-    if not receipt_path.exists():
-        print(
-            f"REFUSED: no rehearsal receipt at {receipt_path}. A run that "
-            "published no receipt has not said what it established",
-            file=sys.stderr,
-        )
-        return EXIT_REFUSED
+    pathlib.Path(args.receipt_out).write_bytes(receipt_bytes)
     try:
-        # v2 ONLY. A v1 receipt cannot carry the authorized
-        # `ExecutionPlanDigestV1` (its item 9 forced three caller digests equal),
-        # so the reader refuses it by schema rather than this gate counting it.
-        #
-        # Not yet called here: `require_execution_run`. The run this oracle
-        # selects is still a Starter-repository run, while a v2 receipt binds the
-        # organization execution repository's run. Binding the two is the oracle
-        # amendment in docs/LANE3_EXECUTION_TOPOLOGY.md § 6 (D-S2), which adds
-        # that call together with the new run selection. Until then no v2 receipt
-        # can exist: the runner still emits v1 and refuses at qualification.
-        receipt = RehearsalReceiptV2.from_json(receipt_path.read_text(encoding="utf-8"))
+        # v2 ONLY: a v1 receipt cannot carry the authorized
+        # `ExecutionPlanDigestV1`, so the reader refuses it by schema.
+        receipt = RehearsalReceiptV2.from_json(receipt_bytes)
         verify_publication(receipt, revision=args.sha)
+        # THE RUN BINDING. The receipt must have been produced by exactly the run
+        # selected above — same repository ID, run ID and attempt — so a receipt
+        # from an earlier passing run cannot stand in for the newest one.
+        require_execution_run(
+            receipt,
+            run=ExecutionRunBindingV1(
+                repository_id=topology.execution_repository_id,
+                run_id=int(proof["run_id"]),
+                run_attempt=attempt,
+            ),
+        )
         # THE THIRD BINDING. `verify_publication` above compares the LANE 3
         # RUNNER revision with the RELEASE revision; this compares the receipt
         # with the ARTIFACT, which is what makes the CANDIDATE SOURCE revision
         # bound rather than merely recorded — the digest identifies exactly one
         # `CandidateArtifact.v1`, and that record names exactly one `source_sha`.
         require_rehearsed_artifact(receipt, artifact_digest=args.artifact_digest)
-    except SpecError as exc:
+    except (SpecError, TypeError, ValueError) as exc:
         print(f"REFUSED: {exc}", file=sys.stderr)
         return EXIT_REFUSED
 
     print(f"rehearsal_run_id={proof['run_id']}")
+    print(f"rehearsal_run_attempt={attempt}")
+    print(f"rehearsal_execution_repository_id={topology.execution_repository_id}")
     print(f"rehearsal_run_url={proof['html_url']}")
-    print(f"rehearsal_head_sha={proof['head_sha']}")
+    print(f"rehearsal_launcher_revision={selected.get('launcher_sha')}")
     print(f"rehearsal_lane={receipt.lane}")
     print(f"rehearsal_receipt_digest={receipt.sha256_digest()}")
     print(f"rehearsal_execution_plan_digest={receipt.execution_plan_digest}")
