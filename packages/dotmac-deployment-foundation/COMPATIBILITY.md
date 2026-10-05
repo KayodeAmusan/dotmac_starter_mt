@@ -231,8 +231,12 @@
   missing or unknown field.
   - **Gate item 9 is a chain** over the authorized `ExecutionPlanDigestV1`, the
     plan's descriptor digest and the executed `DeploymentOutcome`'s copies of
-    both. The builder takes the `FoundationExecutionPlanV3` itself, never a
-    digest string.
+    both. The builder takes the `FoundationExecutionPlanV3` itself, and takes
+    the authorized digest only from the `ExecutionGrant` that `authorize_v3()`
+    issued, never from a string.
+  - **The receipt binds its Control dispatch.** `control_dispatch` records the
+    dispatch ID, execution sequence and attempt, and the outcome must report
+    the grant's sequence and attempt.
   - **The plan names the bytes and the controller.** Its candidate wheel digest
     and controller fingerprint must equal the rehearsed artifact and the
     controller identity.

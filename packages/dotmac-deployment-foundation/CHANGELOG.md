@@ -13,10 +13,18 @@ candidate wheels, so it is not widened. The new schema is v2.
 
 `build_receipt_v2` checks item 9 as a chain: descriptor → plan → authorized
 `ExecutionPlanDigestV1` → the executed `DeploymentOutcome`'s copies of both.
-It takes the `FoundationExecutionPlanV3` itself, and refuses an authorized
-plan digest equal to the descriptor digest (the degenerate v1 shape). It
-requires the plan's candidate wheel and controller fingerprint to be the ones
-rehearsed.
+It takes the `FoundationExecutionPlanV3` itself, and takes the authorized
+digest only from the `ExecutionGrant` that `authorize_v3()` issued. A caller
+therefore cannot alter the plan and supply the altered plan's own digest. It
+also:
+- refuses an authorized plan digest equal to the descriptor digest (the
+  degenerate v1 shape);
+- requires the grant's descriptor and target to match the plan;
+- requires the plan's candidate wheel and controller fingerprint to be the
+  ones rehearsed;
+- requires the outcome's execution sequence and attempt to be the grant's,
+  and records the Control dispatch, so a replayed or foreign execution is
+  refused.
 
 From the Lane 3 organization-execution design (ADR-0070 amendment
 2026-10-05), it also:

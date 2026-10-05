@@ -43,6 +43,7 @@ from collections.abc import Mapping, Sequence
 from enum import Enum
 from typing import TYPE_CHECKING, Any, Final
 
+from .authorization import ExecutionGrant
 from .digest import Digest, require_same_digest
 from .errors import SpecError
 from .execution_plan_v3 import FoundationExecutionPlanV3
@@ -521,6 +522,7 @@ _V2_KEYS: Final = frozenset(
         "lease_id",
         "probe_vantage_ref",
         "execution_run",
+        "control_dispatch",
         "started_at",
         "finished_at",
         "results",
@@ -548,6 +550,25 @@ def _require_not_an_address(name: str, value: str) -> None:
     )
 
 
+def _require_dispatch(dispatch: Any) -> None:
+    """A Control dispatch coordinate: a non-empty ID and two positive counters."""
+    if not isinstance(dispatch, dict) or set(dispatch) != {
+        "dispatch_id",
+        "execution_sequence",
+        "attempt_no",
+    }:
+        raise SpecError(
+            "control_dispatch carries exactly dispatch_id, execution_sequence "
+            "and attempt_no"
+        )
+    if not isinstance(dispatch["dispatch_id"], str) or not dispatch["dispatch_id"]:
+        raise SpecError("control_dispatch.dispatch_id is empty")
+    for name in ("execution_sequence", "attempt_no"):
+        value = dispatch[name]
+        if isinstance(value, bool) or not isinstance(value, int) or value < 1:
+            raise SpecError(f"control_dispatch.{name} must be a positive integer")
+
+
 @dataclasses.dataclass(frozen=True, slots=True)
 class RehearsalReceiptV2(_ReceiptReading):
     """The Lane 3 receipt the release gate reads.
@@ -566,7 +587,10 @@ class RehearsalReceiptV2(_ReceiptReading):
       the authorized plan, never from a caller, and an IP literal is refused.
     - **A private vantage, referenced.** ``probe_vantage_ref`` names a record
       key and version; the address stays in the record.
-    - **The run that produced it** (:class:`ExecutionRunBindingV1`).
+    - **The run that produced it** (:class:`ExecutionRunBindingV1`), and the
+      one Control dispatch it executed (``control_dispatch``: dispatch ID,
+      execution sequence, attempt), so a replayed execution or a moved receipt
+      names a coordinate that does not match.
     - **The raw evidence, by digest.** ``evidence_bundle_digest`` is the digest
       of the evidence bundle exactly as published (encrypted, per the Lane 3
       design), so rows can point into it without the receipt carrying it.
@@ -621,6 +645,7 @@ class RehearsalReceiptV2(_ReceiptReading):
             if not isinstance(content["execution_run"], dict):
                 raise SpecError("execution_run is not an object")
             _ = receipt.execution_run
+            _require_dispatch(content["control_dispatch"])
             _rows(receipt.results)
         except (KeyError, TypeError, ValueError) as exc:
             raise SpecError(f"the receipt is malformed: {exc}") from exc
@@ -637,7 +662,7 @@ def build_receipt_v2(
     foundation_artifact_digest: str,
     descriptor_digest: str,
     execution_plan: FoundationExecutionPlanV3,
-    authorized_execution_plan_digest: str,
+    grant: ExecutionGrant,
     execution_outcome: DeploymentOutcome,
     fixture_digest: str,
     evidence_bundle_digest: str,
@@ -656,8 +681,10 @@ def build_receipt_v2(
     1. The canonical descriptor this rehearsal loaded is the descriptor the
        plan was rendered from (``execution_plan.descriptor_digest``).
     2. The plan in hand is the plan Control froze: its ``digest()`` equals the
-       authorized ``ExecutionPlanDigestV1`` (the grant's, never a dispatch
-       field).
+       ``ExecutionPlanDigestV1`` carried by ``grant``. The builder takes the
+       :class:`ExecutionGrant` itself, which only ``authorize_v3()`` can issue
+       from an attested Control pair, so the authorized digest cannot be a
+       value the caller computed from an altered plan.
     3. The executed outcome reports that same authorized plan digest.
     4. The executed outcome reports that same descriptor digest.
 
@@ -666,6 +693,13 @@ def build_receipt_v2(
     consumer can refuse it. The plan's digest and the descriptor digest are
     different measurements of different documents, so equal values are refused
     too — that is the degenerate v1 shape arriving under a v2 name.
+
+    ## Replay: the outcome executed THIS dispatch
+
+    The outcome's ``execution_sequence`` and ``attempt_no`` must equal the
+    grant's, and the receipt records the dispatch. Control consumes a dispatch
+    once; a receipt that cites one is about that consumption and no other, and
+    :func:`require_execution_run` ties it to one workflow run besides.
 
     ## The plan also names the bytes and the controller
 
@@ -682,6 +716,12 @@ def build_receipt_v2(
         )
     if not isinstance(execution_run, ExecutionRunBindingV1):
         raise SpecError("execution_run must be an ExecutionRunBindingV1")
+    if not isinstance(grant, ExecutionGrant):
+        raise SpecError(
+            "build_receipt_v2 takes the ExecutionGrant authorize_v3() issued, got "
+            f"{type(grant).__name__}. An authorized digest from anywhere else is "
+            "one the caller could have computed from an altered plan"
+        )
     for name, value in (
         ("foundation_revision", foundation_revision),
         ("controller_identity", controller_identity),
@@ -714,9 +754,10 @@ def build_receipt_v2(
     )
     descriptor = str(Digest.parse(descriptor_digest, where="descriptor_digest"))
     authorized = str(
-        Digest.parse(
-            authorized_execution_plan_digest, where="authorized_execution_plan_digest"
-        )
+        Digest.parse(grant.execution_plan_digest, where="grant execution_plan_digest")
+    )
+    granted_descriptor = str(
+        Digest.parse(grant.descriptor_digest, where="grant descriptor_digest")
     )
     rendered = str(Digest.parse(execution_plan.digest(), where="execution_plan"))
 
@@ -734,6 +775,16 @@ def build_receipt_v2(
         raise SpecError(
             f"gate item 9: the plan was rendered from descriptor {plan_descriptor} "
             f"and this rehearsal loaded {descriptor}"
+        )
+    if granted_descriptor != descriptor:
+        raise SpecError(
+            f"the grant authorizes descriptor {granted_descriptor} and this "
+            f"rehearsal loaded {descriptor}"
+        )
+    if grant.target != execution_plan.target:
+        raise SpecError(
+            "the grant authorizes another target than the plan names; an "
+            "approval for one target does not authorize another"
         )
     if rendered != authorized:
         raise SpecError(
@@ -763,6 +814,16 @@ def build_receipt_v2(
             f"{executed['descriptor_digest']} and this rehearsal loaded "
             f"{descriptor}"
         )
+
+    # ── replay: the outcome is the execution of THIS dispatch ──────────────
+    for name in ("execution_sequence", "attempt_no"):
+        if getattr(execution_outcome, name, 0) != getattr(grant, name):
+            raise SpecError(
+                f"the outcome reports {name} "
+                f"{getattr(execution_outcome, name, 0)!r} and the grant was "
+                f"issued for {getattr(grant, name)!r}. An execution of another "
+                "dispatch, or a replay of this one, is not this rehearsal"
+            )
 
     # ── the plan names the bytes and the controller ────────────────────────
     planned_wheel = str(
@@ -804,6 +865,11 @@ def build_receipt_v2(
         "lease_id": str(lease_id).strip(),
         "probe_vantage_ref": str(probe_vantage_ref),
         "execution_run": execution_run.as_document(),
+        "control_dispatch": {
+            "dispatch_id": str(grant.receipt.dispatch_id),
+            "execution_sequence": grant.execution_sequence,
+            "attempt_no": grant.attempt_no,
+        },
         "started_at": str(started_at).strip(),
         "finished_at": str(finished_at).strip(),
         "results": rows,
