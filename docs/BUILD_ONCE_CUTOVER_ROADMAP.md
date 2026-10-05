@@ -250,3 +250,92 @@ dispatch, key creation, OpenBao read, or secret value observed):
 These are gate-1 preconditions this roadmap already listed as open ("prepares
 a protected, real ten-step recovery and Lane 3 runner"); this update dates
 and confirms them rather than changing what gate 1 requires.
+
+## Update, 2026-10-05 — Packet D moved out of Starter; Starter's share is Lane 3 private delivery
+
+**This is a dated observation, not a rewrite of the plan.** The gate table,
+the 2026-09-24 numbering reconciliation and the packet ownership above stand,
+except where this section names a correction. Re-verify every coordinate
+before acting.
+
+### Refreshed baseline
+
+| Repository | `main` at this observation |
+| --- | --- |
+| Starter | `e066dd07671a96e5adf1740e8073e90573f3963e` |
+| Platform CP | `bf1d16265be638eac2fc63583d60f5e1f3248529` (#234) |
+| `dotmac_deployment_control` | `ad95f4e1ef2bc454450ffc1f59a8d6f090b32431` (release record #74) |
+| `dotmac-tech/gate0-issuer-execution` | `453ad4db44d0fe9ddf94748cd1fa124cdcc2d680` |
+
+### Correction: Packet D's protected workflow is not Starter's
+
+The 2026-09-24 table above assigns **D. Protected workflow** to the "Starter
+protected-workflow owner". Michael's 2026-09-30 ruling on public GitHub Free
+superseded that placement. It is recorded as § 11 of CP
+`docs/design/gate0-d-implementation-spec.md` (CP #229, merged
+`6f5efe2176e25477816f24e6762d5ce9e9fb34ed`). The protected Gate-0 workflow,
+Environment and runner group live in the public, organization-owned
+`dotmac-tech/gate0-issuer-execution` (repository ID `1397614140`, organization
+ID `335992433`). Platform CP keeps the operator-workflow and readiness-receipt
+ownership (§ A7.6–A7.7).
+
+**The one D item that remains Starter's** is the spec's § 8 row "design and
+verify private delivery of observer, jump and inside-vantage configuration
+through Starter/Foundation infrastructure" (ADR-0013 § A7.6). On 2026-10-05
+Michael chose organization-owned Lane 3 execution for it: a dedicated
+workflow-restricted runner group, a protected Environment, ephemeral runners,
+an amended rehearsal oracle, and retirement of `control-runner-starter-mt` and
+its static credentials. The design is
+[`docs/LANE3_EXECUTION_TOPOLOGY.md`](LANE3_EXECUTION_TOPOLOGY.md), recorded by
+the ADR-0070 amendment of 2026-10-05. Its source work (D-S2 workflow and
+oracle, D-S3 guards) stays fail-closed until provisioning and the negative
+proofs are recorded. The four Lane 3 runner fixes in
+`docs/inventories/lane3-acceptance-criteria.md` are tracked separately (D4)
+and are not part of D.
+
+### What closed since 2026-09-24
+
+Positive coordinates only. Each is a merge, run or peeled tag, not a status
+claim.
+
+- **Packet A and CP ADR-0013 A6.** § A7 was ratified 2026-09-24; the full A6
+  amendment, including A6.4, was ratified 2026-09-25 (recorded in Starter
+  #748, #749).
+- **Packet C1, source.** Starter #753 merged as
+  `cb2d9f8983f7bb40141540a0490731320bca0fe3` (V3 execution authority and
+  unified host admission). Starter #761 merged as
+  `adf8632d1a09d6bd1c430e0e4069bb6c48d5d81b` (Foundation transition-receipt
+  verifier). **Both are unreleased**: no Foundation successor exists.
+- **Packet D public topology.** Execution repository refusal-only PR #1 was
+  merged as `f218660b6ff7c3a01b877e6ab080efcd31672805`. The bounded
+  scheduling-and-teardown subgate completed 2026-10-01: in protected run
+  `36858977107`, Michael approved the Environment, the job was assigned to the
+  `gate0-issuer-protected` group, and the intended refusal step executed. The
+  six historical negative fixtures were re-run first and their eleven jobs
+  never received a runner. The disposable canary was removed afterwards.
+  **No privileged runner was attached.**
+- **Control and CP source composition.** `dotmac-deployment-control`
+  `0.1.0a17` is tagged `dotmac-deployment-control-v0.1.0a17`, peeling to
+  `574418944d35ddf3559d17e59e9184b5f545ebe4`. CP #233 adopted it at source
+  level (`40e9fddf6a586b511bb73116696b463423448ef1`). CP #217 (`d598aa0e`),
+  #231 (`6e9166d7`), #232 (`a88d9ff3`) and #234 (`bf1d1626`) also merged. These
+  are source composition, not production adoption.
+
+### Still open, as of 2026-10-05
+
+These are absences: dated, with a named refresh owner.
+
+| Item | State | Refresh owner |
+| --- | --- | --- |
+| Gate-0 D credential-bearing provisioning (OpenBao JWT role, issuer and attester signers, trust state, SSH CA, privileged runner) | Not provisioned | Michael |
+| Gate-0 E readiness receipt | Not started | Platform CP |
+| Gate 2 (allocate `0.4.0a2`) | Not started. `packages/dotmac-deployment-foundation/pyproject.toml` still declares spent `0.4.0a1` | Starter release captain |
+| Lane 3 | 0/16 `executed_passed`. No receipt has ever been produced | Foundation / Lane 3 runner owner (D4) |
+| Starter Lane 3 vantage | Environments are still only `pypi-release` and `registry-release`. Variables are still only `LANE3_PROBE_HOST` and `RELEASE_RECORDER_CLIENT_ID`. `control-runner-starter-mt` is online and idle | Starter (this design), then Michael (provisioning) |
+| `retired_total` | 0 | Each product |
+
+**A new Gate-2 ordering constraint** comes from the Lane 3 design. Lane 3
+receipts must carry opaque identifiers instead of target and probe addresses,
+and must bind the producing run. Because that is a Foundation receipt-contract
+change, it must land in Foundation source before the Gate-2 freeze, or the
+candidate it ships in is spent.
