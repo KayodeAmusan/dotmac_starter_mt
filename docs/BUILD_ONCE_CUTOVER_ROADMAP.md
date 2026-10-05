@@ -362,3 +362,42 @@ wheels, so they need a `RehearsalReceipt.v2`.
    addresses, from the Lane 3 design.
 3. Lane 3 receipts must bind the GitHub run that produced them, also from the
    Lane 3 design.
+
+### The freeze boundary: what each change costs after Gate 2
+
+The candidate, the release revision and the execution tooling are three
+different things. They are bound by three different checks, so a change
+after the freeze costs one of three different prices.
+
+| Layer | What it is | Bound by | Changing it after the Gate-2 freeze… |
+| --- | --- | --- | --- |
+| **Candidate bytes** | `packages/dotmac-deployment-foundation/src/` and the version its metadata declares, built once into the recorded wheel and sdist | The candidate-window guard compares the `src/` **tree object** with the recorded `source_sha` (rule 50). The receipt and the plan bind the wheel digest | **spends the candidate.** It needs a `CandidateDisposition.v1`, a new version and a new build (rules 44, 48) |
+| **Release revision** | The Starter protected-`main` commit that publishes | `verify_publication` requires the receipt's runner revision to **equal** it. Candidate source must be an ancestor of both (ruling 4, `release_facility.py verify-revisions`) | **voids the authoritative rehearsal, not the candidate.** Any Starter commit after the Gate-3 rehearsal means re-rehearsing the same bytes at the new commit, inside the rule 32 freeze |
+| **Execution tooling** | `scripts/` (runner, oracle, collectors), `.github/`, the organization launcher repository, provisioned configuration | The runner revision in the receipt. The launcher revision admitted in `.github/lane3-execution.json` (D-S2). Live read-backs | **costs nothing to the candidate.** It moves the release revision (row 2) or the admitted launcher revision, so the rehearsal must run after it lands |
+
+**Placement of open work:**
+
+- **Before the freeze, because it is candidate bytes:** `RehearsalReceipt.v2`
+  (#770). Also any Foundation API that D4 or CP's Gate-3 composition turns out
+  to need.
+- **Must be answered before allocating `0.4.0a2`:**
+  1. Can the D4 rollback provocation (item 8) and apply-under-lock (item 1)
+     drive the existing public `Executor` from outside the package? Or do they
+     need a Foundation entry point?
+  2. Does CP's Gate-3 composition construct both executors with its own
+     admission provider, as `host_source_admission.py` intends? The frozen
+     CLI ships only `RefusingHostSourceAdmissionProvider`.
+
+  A "needs Foundation change" answer to either moves that change before the
+  freeze.
+- **After the freeze if they touch no candidate bytes, and before the
+  authoritative Gate-3 rehearsal:** D-S2 (oracle, launcher), D-S3 (guards)
+  and D4's runner-side fixes. Each lands, and the rehearsal then runs at the
+  resulting release revision.
+- **Must exist before a complete Gate-3 receipt can be claimed, wherever it
+  lands:** D4's rollback provocation and measured service state.
+
+**#770 establishes the receipt contract; it does not establish rehearsal
+readiness.** The cutover blocker closes only when the producer, private
+delivery, runner capability and protected execution can all satisfy that
+contract.
