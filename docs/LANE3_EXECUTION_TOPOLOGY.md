@@ -269,6 +269,11 @@ changes the oracle (D-S2), not before. Rules describe enforced behaviour.
 
 ## 7. Admission evidence before a privileged runner or credential
 
+The [2026-10-06 B5 scheduling record](inventories/lane3-b5-scheduling-evidence-2026-10-06.md)
+contains the canonical run/job references and expected positive-launcher refusal.
+N3 was not executed, and later credential/admission evidence remains incomplete;
+this record does not admit the topology. `admission_evidence` remains null.
+
 This mirrors CP § 11. A positive dispatch alone is never sufficient. On the
 single ephemeral runner the order is fixed: the runner is shown idle, the
 negative cases are queued and stay unassigned for the stated bound, and only
