@@ -345,3 +345,55 @@ them red):
    read the execution repository.
 4. Where the JIT provisioner runs, and its owner.
 5. Certificate and token TTLs, after measurement.
+
+## 12. D4 scope: producing `RehearsalReceipt.v2` (added 2026-10-06)
+
+D4 stays separate from Packet D (§ 10). This section fixes only its first
+slice, so that a receipt the § 6 oracle reads has exactly one producer.
+
+**Where it runs.** In the launcher's job in
+`dotmac-tech/lane3-exposure-execution`, on an ephemeral runner in
+`lane3-exposure-protected`, after `lane3-rehearsal-protected` is approved. The
+producer is Starter execution tooling (`scripts/lane3_receipt_v2.py`), outside
+Foundation `src/`. It costs the candidate nothing and moves the release
+revision (roadmap freeze-boundary table, row 3).
+
+**Inputs, and where each may come from.**
+
+| Input | Source | Refused when |
+| --- | --- | --- |
+| `FoundationExecutionPlanV3`, `ExecutionGrant` | The trusted CP-rendered plan and `authorize_v3()` over an attested Control V2 pair | Always today: no provider and no verifier exist (`acquire_authority`, exit 2) |
+| `DeploymentOutcome` | The public `Executor`, driven in-process under `deployment_lock` | Always today: host-source admission has no attesting provider (`execute_authorized_plan`, exit 2) |
+| `ExecutionRunBindingV1` | The Actions runtime's repository, owner, run and attempt | The repository ID, owner ID, event, ref or workflow ref differ from `.github/lane3-execution.json` (exit 1) |
+| `probe_vantage_ref` | `<record-key>@<version>` of the private topology record | Not that grammar (an address or hostname does not parse) |
+| `evidence_bundle_digest` | SHA-256 of the bundle as uploaded | The bundle is not `age`-encrypted (decision 9) |
+| Results | The sixteen rows, each from its measuring phase | Any row missing or duplicated (`build_receipt_v2`) |
+
+The runtime coordinates are a consistency check, not trust: a job step can
+overwrite its own environment. The binding holds because the oracle selects the
+run by API and `require_execution_run` refuses a receipt naming another run.
+
+**Output.** The receipt's canonical bytes, written create-only after being
+re-read by `RehearsalReceiptV2.from_json` and `require_execution_run`, the
+oracle's own reader and check.
+
+**Q1, answered 2026-10-06: yes, with conditions.** Items 1 and 8 can drive the
+public `Executor` with no Foundation `src/` change:
+`render_execution_plan` → V2 → V3, then `ExecutionBindings` → `authorize_v3`,
+then `Executor(...)` under `deployment_lock` → `.run` / `.rollback`. The
+conditions:
+
+- **In-process only.** The CLI hard-codes `RefusingHostSourceAdmissionProvider`,
+  and `Executor.run` verifies the host source first.
+- **A Starter-owned `HostSourceAdmissionProvider`** over the public
+  `admit_host_source`. It stays refusing until Gate-0 attestation exists.
+- **Its own effects and runner.** The producer supplies its own `Effects` and
+  `ExposureEffects`, and passes its own runner to `ComposeHostExposureEffects`.
+  It never imports the CLI's private default runner.
+- **A local mirror** of the CLI's private V3 plan rendering, with a parity test
+  against the CLI path.
+
+**Not in this slice.** The admission provider, the Executor drive, the
+OpenBao topology read, `lane3-ssh/` certificates, the CLI parity test, and
+moving `exposure_rehearsal_runner.py` (still v1) onto the producer. The
+launcher calls the producer only after D-S2c.
