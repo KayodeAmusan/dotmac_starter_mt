@@ -40,6 +40,7 @@ REPO_ID = 1406738001
 OWNER_ID = 335992433
 WORKFLOW = ".github/workflows/lane3-exposure-rehearsal.yml"
 EXECUTION_REPO = "dotmac-tech/lane3-exposure-execution"
+LAUNCHER = "e" * 40
 
 DOCUMENT: dict[str, Any] = {
     "schema": "Lane3ExecutionTopology.v1",
@@ -54,7 +55,7 @@ DOCUMENT: dict[str, Any] = {
         "reviewer": "michaelayoade",
     },
     "runner_group": {"name": "lane3-exposure-protected", "id": 4},
-    "admitted_launcher_revisions": ["e" * 40],
+    "admitted_launcher_revisions": [LAUNCHER],
     "receipt_artifact": "lane3-rehearsal-receipt",
     "admission_evidence": "docs/LANE3_EXECUTION_TOPOLOGY.md#7 run 1",
 }
@@ -67,9 +68,19 @@ ENVIRON: dict[str, str] = {
     "GITHUB_RUN_ATTEMPT": "1",
     "GITHUB_EVENT_NAME": "workflow_dispatch",
     "GITHUB_REF": "refs/heads/main",
+    "GITHUB_SHA": LAUNCHER,
     "GITHUB_WORKFLOW_REF": f"{EXECUTION_REPO}/{WORKFLOW}@refs/heads/main",
 }
 RUN = ExecutionRunBindingV1(repository_id=REPO_ID, run_id=4242, run_attempt=1)
+API_RUN: dict[str, Any] = {
+    "id": 4242,
+    "run_attempt": 1,
+    "repository": {"id": REPO_ID, "owner": {"id": OWNER_ID}},
+    "path": WORKFLOW,
+    "head_branch": "main",
+    "event": "workflow_dispatch",
+    "head_sha": LAUNCHER,
+}
 BUNDLE = b"age-encryption.org/v1\n-> X25519 synthetic\n--- mac\n\x00ciphertext"
 
 
@@ -238,30 +249,55 @@ def _topology_file(tmp_path: pathlib.Path, document: dict[str, Any]) -> str:
     return str(path)
 
 
+def _api_file(tmp_path: pathlib.Path, document: Any = None) -> str:
+    path = tmp_path / "api-run.json"
+    path.write_text(json.dumps(API_RUN if document is None else document), "utf-8")
+    return str(path)
+
+
+def _argv(tmp_path: pathlib.Path, *, topology: Any = DOCUMENT, api: Any = None):
+    return [
+        "--topology",
+        _topology_file(tmp_path, topology),
+        "--api-run",
+        _api_file(tmp_path, api),
+        "--receipt-out",
+        str(tmp_path / "receipt.json"),
+    ]
+
+
 def test_the_checked_in_topology_is_indeterminate_today(tmp_path: pathlib.Path) -> None:
     # The real file: admission_evidence is null until § 7's proofs exist.
     out = tmp_path / "receipt.json"
-    assert producer.main(["--receipt-out", str(out)], environ=ENVIRON) == 2
+    argv = ["--api-run", _api_file(tmp_path), "--receipt-out", str(out)]
+    assert producer.main(argv, environ=ENVIRON) == 2
     assert not out.exists()
 
 
 def test_an_admitted_topology_is_still_indeterminate_without_a_provider(
     tmp_path: pathlib.Path,
 ) -> None:
-    out = tmp_path / "receipt.json"
-    argv = ["--topology", _topology_file(tmp_path, DOCUMENT), "--receipt-out", str(out)]
-    assert producer.main(argv, environ=ENVIRON) == 2
-    assert not out.exists()
+    assert producer.main(_argv(tmp_path), environ=ENVIRON) == 2
+    assert not (tmp_path / "receipt.json").exists()
 
 
 def test_a_foreign_run_is_refused_before_authority_is_asked(
     tmp_path: pathlib.Path,
 ) -> None:
-    out = tmp_path / "receipt.json"
-    argv = ["--topology", _topology_file(tmp_path, DOCUMENT), "--receipt-out", str(out)]
     environ = {**ENVIRON, "GITHUB_REPOSITORY_ID": "1397614141"}
-    assert producer.main(argv, environ=environ) == 1
-    assert not out.exists()
+    assert producer.main(_argv(tmp_path), environ=environ) == 1
+    assert not (tmp_path / "receipt.json").exists()
+
+
+def test_an_api_run_that_disagrees_refuses_the_cli(tmp_path: pathlib.Path) -> None:
+    api = {**API_RUN, "run_attempt": 2}
+    assert producer.main(_argv(tmp_path, api=api), environ=ENVIRON) == 1
+
+
+def test_an_unreadable_api_run_refuses_the_cli(tmp_path: pathlib.Path) -> None:
+    argv = _argv(tmp_path)
+    pathlib.Path(argv[3]).write_text("not json", encoding="utf-8")
+    assert producer.main(argv, environ=ENVIRON) == 1
 
 
 def test_an_unadmitted_topology_never_reaches_the_run_check(
@@ -269,5 +305,79 @@ def test_an_unadmitted_topology_never_reaches_the_run_check(
 ) -> None:
     document = copy.deepcopy(DOCUMENT)
     document["admission_evidence"] = None
-    argv = ["--topology", _topology_file(tmp_path, document), "--receipt-out", "x"]
-    assert producer.main(argv, environ={}) == 2
+    assert producer.main(_argv(tmp_path, topology=document), environ={}) == 2
+
+
+# ── the API's run must agree with the runtime's ─────────────────────────────
+
+
+def _agree(api: dict[str, Any], environ: dict[str, str] = ENVIRON) -> None:
+    producer.require_api_agreement(api, environ=environ, binding=RUN, topology=TOPOLOGY)
+
+
+def test_an_agreeing_api_run_is_accepted() -> None:
+    _agree(API_RUN)
+
+
+def _with(path: str, value: Any) -> dict[str, Any]:
+    api = copy.deepcopy(API_RUN)
+    node = api
+    parts = path.split(".")
+    for part in parts[:-1]:
+        node = node[part]
+    if value is _DROP:
+        del node[parts[-1]]
+    else:
+        node[parts[-1]] = value
+    return api
+
+
+_DROP = object()
+
+
+@pytest.mark.parametrize(
+    ("path", "value"),
+    [
+        ("id", 4243),
+        ("run_attempt", 2),
+        ("repository.id", 1397614141),
+        ("repository.owner.id", 1),
+        ("path", ".github/workflows/other.yml"),
+        ("head_branch", "feature"),
+        ("event", "pull_request"),
+        ("head_sha", "f" * 40),
+        ("id", _DROP),
+        ("head_sha", _DROP),
+        ("run_attempt", True),
+    ],
+)
+def test_any_api_disagreement_is_refused(path: str, value: Any) -> None:
+    with pytest.raises(producer.ReceiptRefused):
+        _agree(_with(path, value))
+
+
+def test_an_unadmitted_launcher_is_refused_even_when_both_witnesses_agree() -> None:
+    other = "f" * 40
+    with pytest.raises(producer.ReceiptRefused, match="admitted launcher"):
+        _agree({**API_RUN, "head_sha": other}, {**ENVIRON, "GITHUB_SHA": other})
+
+
+# ── the Starter-owned host-source admission provider ────────────────────────
+
+
+def test_the_admission_provider_satisfies_the_seam_and_refuses_like_the_reference():
+    from dotmac_deployment_foundation.errors import PreconditionFailed
+    from dotmac_deployment_foundation.host_source_admission import (
+        HostSourceAdmissionProvider,
+        RefusingHostSourceAdmissionProvider,
+    )
+    from lane3_host_source_admission import Lane3HostSourceAdmissionProvider
+
+    ours = Lane3HostSourceAdmissionProvider()
+    assert isinstance(ours, HostSourceAdmissionProvider)
+    with pytest.raises(PreconditionFailed) as mine:
+        ours.admit_host_source()
+    with pytest.raises(PreconditionFailed) as reference:
+        RefusingHostSourceAdmissionProvider().admit_host_source()
+    assert mine.value.code == reference.value.code
+    assert mine.value.code

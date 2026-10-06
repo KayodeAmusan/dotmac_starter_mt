@@ -25,6 +25,8 @@ plan, grant, outcome    the trusted CP-rendered ``FoundationExecutionPlanV3``,
                         must exist first
 execution run           the Actions runtime's own coordinates, compared with the
                         pinned topology (:func:`execution_run_from_environment`)
+                        AND with the run as the Actions API reports it, which the
+                        launcher reads and passes in (:func:`require_api_agreement`)
 probe vantage           ``<record-key>@<version>`` of the private topology record;
                         never an address
 evidence bundle         the SHA-256 of the ENCRYPTED bundle as uploaded
@@ -39,8 +41,15 @@ job step could overwrite them, so a value read here is not proof of anything.
 What makes the binding hold is the ORACLE: ``require_rehearsal`` selects one run
 by its API and refuses a receipt whose ``execution_run`` names any other
 (``require_execution_run``). This module refuses early when the runtime's own
-coordinates already contradict the pinned topology, so a receipt that could
-never be accepted is not produced at all.
+coordinates already contradict the pinned topology, or contradict the run the
+Actions API describes, so a receipt that could never be accepted is not
+produced at all.
+
+The API document is a second witness, not an authority either. The launcher
+fetched it with a token the job holds, so a job that can rewrite its
+environment can also rewrite the file. Agreement makes an accidental mismatch
+(a re-run attempt, a wrong ref, a step that edited one variable) refuse here
+rather than at publication. It does not replace ``require_execution_run``.
 
 Exit codes are the repository's three: 0 a receipt was written, 1 refused, 2 the
 question cannot be answered here (today, always: no trusted plan provider).
@@ -49,11 +58,12 @@ question cannot be answered here (today, always: no trusted plan provider).
 from __future__ import annotations
 
 import argparse
+import json
 import os
 import pathlib
 import sys
 from collections.abc import Mapping, Sequence
-from typing import TYPE_CHECKING, Final
+from typing import TYPE_CHECKING, Any, Final
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
 
@@ -166,6 +176,65 @@ def execution_run_from_environment(
     )
 
 
+def _api_field(run: Mapping[str, Any], path: str) -> Any:
+    node: Any = run
+    for part in path.split("."):
+        node = node.get(part) if isinstance(node, Mapping) else None
+    return node
+
+
+def require_api_agreement(
+    api_run: Mapping[str, Any],
+    *,
+    environ: Mapping[str, str],
+    binding: ExecutionRunBindingV1,
+    topology: Lane3ExecutionTopology,
+) -> None:
+    """Refuse unless the Actions API's run and this job's runtime agree.
+
+    ``api_run`` is the ``GET /repos/{owner}/{repo}/actions/runs/{run_id}``
+    response, saved by the launcher. Each field is compared with the job's own
+    coordinates, and the API's workflow path, branch, event and launcher commit
+    with the pinned topology too. A missing field is a mismatch, never a skip.
+    """
+    pairs: tuple[tuple[str, Any, Any], ...] = (
+        ("id", _api_field(api_run, "id"), binding.run_id),
+        ("run_attempt", _api_field(api_run, "run_attempt"), binding.run_attempt),
+        ("repository.id", _api_field(api_run, "repository.id"), binding.repository_id),
+        (
+            "repository.owner.id",
+            _api_field(api_run, "repository.owner.id"),
+            topology.execution_owner_id,
+        ),
+        ("path", _api_field(api_run, "path"), topology.workflow_path),
+        ("head_branch", _api_field(api_run, "head_branch"), "main"),
+        ("event", _api_field(api_run, "event"), environ.get("GITHUB_EVENT_NAME")),
+        ("head_sha", _api_field(api_run, "head_sha"), environ.get("GITHUB_SHA")),
+    )
+    for name, reported, expected in pairs:
+        if isinstance(reported, bool) or reported != expected or reported in ("", None):
+            raise ReceiptRefused(
+                f"the Actions API reports run {name}={reported!r} and this job "
+                f"has {expected!r}. A receipt binds one run, and two witnesses "
+                "that disagree about which run this is cannot both be right"
+            )
+    if api_run["head_sha"] not in topology.admitted_launcher_revisions:
+        raise ReceiptRefused(
+            f"launcher commit {api_run['head_sha']!r} is not an admitted launcher "
+            "revision in .github/lane3-execution.json"
+        )
+
+
+def load_api_run(path: pathlib.Path) -> Mapping[str, Any]:
+    try:
+        document = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError) as exc:
+        raise ReceiptRefused(f"cannot read the Actions API run {path}: {exc}") from exc
+    if not isinstance(document, dict):
+        raise ReceiptRefused("the Actions API run document is not an object")
+    return document
+
+
 def evidence_bundle_digest(payload: bytes) -> str:
     """SHA-256 of the evidence bundle exactly as uploaded — ciphertext only."""
     if not payload.startswith(AGE_HEADERS):
@@ -274,12 +343,23 @@ def main(
             / "lane3-execution.json"
         ),
     )
+    parser.add_argument(
+        "--api-run",
+        required=True,
+        help="the launcher's saved GET .../actions/runs/{run_id} response",
+    )
     parser.add_argument("--receipt-out", required=True)
     args = parser.parse_args(argv)
     env = os.environ if environ is None else environ
     try:
         topology = load_topology(pathlib.Path(args.topology))
-        execution_run_from_environment(env, topology=topology)
+        binding = execution_run_from_environment(env, topology=topology)
+        require_api_agreement(
+            load_api_run(pathlib.Path(args.api_run)),
+            environ=env,
+            binding=binding,
+            topology=topology,
+        )
         acquire_authority()
     except TopologyRefused as exc:
         print(f"INDETERMINATE: {exc}", file=sys.stderr)

@@ -301,7 +301,7 @@ read-back, not by the change that was meant to cause it.
 
 | Step | Action | Evidence |
 | --- | --- | --- |
-| R1 | **Split, 2026-10-06.** (a) `exposure-rehearsal.yml` is retired only after its rehearse-job steps move into a Starter-owned script that the launcher calls (D-S2c). About 40 Starter guard tests encode its Lane 3 properties (candidate-bytes execution, `-E -P` isolation, authorization before probe, capability preflight). Deleting it first would leave those properties unguarded, because the launcher lives in another repository. (b) `control-runner-diagnostic.yml` is **held**: `packages/dotmac-runner-transport/EXTRACTION.toml` names VMID 124 (the control runner) as that programme's first adopter, and its cutover needs both repository diagnostics. Retiring it needs an owner decision on which plan wins. When R1 lands, it updates the executor inventory and lowers the `vars.LANE3_` ratchet to empty | Merge SHA. Executor-retirement ratchet green. |
+| R1 | **Split, 2026-10-06.** (a) `exposure-rehearsal.yml` is retired only after its rehearse-job steps move into a Starter-owned script that the launcher calls (D-S2c). 19 Starter guard test cases (measured 2026-10-06; § 13) encode its Lane 3 properties (candidate-bytes execution, `-E -P` isolation, authorization before probe, capability preflight). Deleting it first would leave those properties unguarded, because the launcher lives in another repository. (b) `control-runner-diagnostic.yml` is **held**: `packages/dotmac-runner-transport/EXTRACTION.toml` names VMID 124 (the control runner) as that programme's first adopter, and its cutover needs both repository diagnostics. Retiring it needs an owner decision on which plan wins. When R1 lands, it updates the executor inventory and lowers the `vars.LANE3_` ratchet to empty | Merge SHA. Executor-retirement ratchet green. |
 | R2 | Deregister `control-runner-starter-mt`. **Held** with R1(b): same VMID 124 conflict | Starter runner listing reads zero runners, with a timestamp. |
 | R3 | Destroy the runner VM and its disk, including the controller, observer, jump and probe keys at rest, and retire its Fleet declaration. **Held** with R1(b). The Lane 3 static keys can still be removed from the VM and from `authorized_keys` (R4) without destroying the VM | Hypervisor read-back of absence. Fleet record change. |
 | R4 | Remove the static `lane3obs`, jump and probe-host keys from every `authorized_keys` they were installed in | Per-host read-back naming the host. "Unobserved" is recorded as unobserved, never as absent. |
@@ -365,13 +365,18 @@ revision (roadmap freeze-boundary table, row 3).
 | `FoundationExecutionPlanV3`, `ExecutionGrant` | The trusted CP-rendered plan and `authorize_v3()` over an attested Control V2 pair | Always today: no provider and no verifier exist (`acquire_authority`, exit 2) |
 | `DeploymentOutcome` | The public `Executor`, driven in-process under `deployment_lock` | Always today: host-source admission has no attesting provider (`execute_authorized_plan`, exit 2) |
 | `ExecutionRunBindingV1` | The Actions runtime's repository, owner, run and attempt | The repository ID, owner ID, event, ref or workflow ref differ from `.github/lane3-execution.json` (exit 1) |
+| The run, as the Actions API reports it | `GET .../actions/runs/{run_id}`, read by the launcher and passed as `--api-run` | Any of run ID, attempt, repository ID, owner ID, workflow path, branch, event or head SHA differs from the runtime or the topology, or the head SHA is not an admitted launcher revision (exit 1) |
 | `probe_vantage_ref` | `<record-key>@<version>` of the private topology record | Not that grammar (an address or hostname does not parse) |
 | `evidence_bundle_digest` | SHA-256 of the bundle as uploaded | The bundle is not `age`-encrypted (decision 9) |
 | Results | The sixteen rows, each from its measuring phase | Any row missing or duplicated (`build_receipt_v2`) |
 
-The runtime coordinates are a consistency check, not trust: a job step can
-overwrite its own environment. The binding holds because the oracle selects the
-run by API and `require_execution_run` refuses a receipt naming another run.
+Neither witness is trusted. A job step can overwrite its own environment, and
+the launcher's API document was fetched with a token the job holds, so a job
+that can rewrite one can rewrite the other. Requiring them to agree turns an
+accidental mismatch (a re-run attempt, a wrong ref, a step that edited one
+variable) into a refusal here instead of at publication. **The binding
+authority stays the oracle:** it selects the run by API with its own token, and
+`require_execution_run` refuses a receipt naming any other run.
 
 **Output.** The receipt's canonical bytes, written create-only after being
 re-read by `RehearsalReceiptV2.from_json` and `require_execution_run`, the
@@ -385,15 +390,97 @@ conditions:
 
 - **In-process only.** The CLI hard-codes `RefusingHostSourceAdmissionProvider`,
   and `Executor.run` verifies the host source first.
-- **A Starter-owned `HostSourceAdmissionProvider`** over the public
-  `admit_host_source`. It stays refusing until Gate-0 attestation exists.
+- **A Starter-owned `HostSourceAdmissionProvider`:**
+  `scripts/lane3_host_source_admission.py` (`Lane3HostSourceAdmissionProvider`).
+  It refuses today by delegating to Foundation's
+  `RefusingHostSourceAdmissionProvider`, so it uses the same codes and has zero
+  effects. The real implementation calls the public `admit_host_source` with:
+  - the Gate-0 attester's candidate and installed `AttestationEnvelopeV2`
+    pair, which binds the authorized wheel digest and what the target's
+    interpreter loads;
+  - an `AttestationVerifier` and `AttestationTrustPolicy` pinned to the
+    attester key in Gate-0 trust state, never taken from job inputs;
+  - the plan's `host_id`, the attested observation, and the package
+    `dotmac-deployment-foundation`;
+  - Control's `verification_context_digest` for this dispatch, and the
+    current time.
+
+  It cannot exist before Gate-0 steps A3–A5, which create the attester VM, its
+  key and the trust state, nor before Control offers a context API.
 - **Its own effects and runner.** The producer supplies its own `Effects` and
   `ExposureEffects`, and passes its own runner to `ComposeHostExposureEffects`.
   It never imports the CLI's private default runner.
-- **A local mirror** of the CLI's private V3 plan rendering, with a parity test
-  against the CLI path.
+- **A local mirror** of the CLI's private V3 plan rendering:
+  `scripts/lane3_plan_v3.py`, built from public calls only.
+  `tests/unit/test_lane3_plan_v3.py` proves the same canonical bytes and digest
+  as `cli._render_local_execution_plan_v3`, and the same refusals. If parity
+  ever breaks, the mirror follows the CLI, or Foundation exposes a public entry
+  point before the Gate-2 freeze.
 
-**Not in this slice.** The admission provider, the Executor drive, the
-OpenBao topology read, `lane3-ssh/` certificates, the CLI parity test, and
-moving `exposure_rehearsal_runner.py` (still v1) onto the producer. The
+**Not in this slice.** A real admission provider, the Executor drive, the
+OpenBao topology read, `lane3-ssh/` certificates, and moving
+`exposure_rehearsal_runner.py` (still v1) onto the producer (§ 13). The
 launcher calls the producer only after D-S2c.
+
+## 13. D-S2c plan: one Starter-owned rehearsal script (planning only, 2026-10-06)
+
+D-S2c is what lets R1a retire `exposure-rehearsal.yml` without leaving its
+Lane 3 properties unguarded. This section plans it. **No workflow is deleted
+by the PR that adds it.**
+
+### Steps, in order
+
+| # | Step | Where | Freeze-boundary cost |
+| --- | --- | --- | --- |
+| C1 | Move the rehearse job's steps into `scripts/lane3_rehearse.sh`: capability check, candidate download and digest verification, isolated `python -E -P` install, authorization, probe collection, runner call, terminal-record write. `exposure-rehearsal.yml` then calls only that script, so its properties are asserted on the script | Starter | Execution tooling (row 3): no candidate cost; moves the release revision |
+| C2 | Migrate `exposure_rehearsal_runner.py` from `build_receipt` (v1) onto the D4 producer: `assemble_receipt` with a plan, grant and outcome from `acquire_authority` and `execute_authorized_plan`. Item 9 becomes the v2 chain. The v1 path is removed in the same change, so nothing can publish a v1 receipt | Starter | Row 3; the receipt contract (#770) is already in candidate bytes, and nothing in Foundation `src/` changes |
+| C3 | The launcher calls `scripts/lane3_rehearse.sh` at the dispatched Starter revision, and passes `--api-run` from its own API read. Its new commit is admitted in `.github/lane3-execution.json` with a checked-in launcher snapshot (below) | launcher repo, then Starter | Row 3; moves the **admitted launcher revision** |
+| C4 | Admission evidence (§ 7, B5), then two distinct successful controller cycles through the launcher, as rule 45 requires before any retirement | live | None; it is evidence |
+| C5 | **R1a:** delete `exposure-rehearsal.yml` and record its removal receipt. Set the `workflow:exposure-rehearsal` disposition in `docs/inventories/executor-retirement/dotmac_starter_mt.toml` to retired, lower `LANE3_VARIABLE_BASELINE` to empty, and retire or rehome the tests below | Starter | Row 3; moves the release revision, so it lands **before** the authoritative Gate-3 rehearsal, or the rehearsal is repeated after it |
+
+C1 and C2 can land now: they are fail-closed and touch no host. C3 needs the
+admitted launcher change. C4 needs B5 and Gate-0. C5 needs C4.
+
+### The 19 dependent test cases, and where each goes
+
+"Script" means the guard is re-pointed at `scripts/lane3_rehearse.sh` in C1.
+"Launcher" means the property belongs to the launcher workflow. A launcher
+property is guarded in Starter against a **checked-in snapshot** of the
+admitted launcher workflow, whose digest is recorded beside its revision in
+`.github/lane3-execution.json`. A launcher revision is admitted only if the
+snapshot matches the launcher repository at that commit. The launcher's own
+`source-policy` keeps its copy of each check.
+
+| File | Cases | Disposition |
+| --- | --- | --- |
+| `test_exposure_rehearsal_requires_runner_capability.py` | 5 | Script: capability check unconditional, first, before runner liveness; record-upload shape. The two "both workflows" cases become script-plus-candidate-workflow |
+| `test_lane_three_runner_preflight.py` | 5 | Launcher snapshot: hosted preflight, time bound, invokes the refusal, rehearsal depends on preflight. **Retired:** `test_the_rehearsal_job_still_targets_the_control_runner`, inverted by the runner-group check in `require_run_context` |
+| `test_lane3_authorization.py` | 2 | Script: the authorization gate precedes probe and runner; no single V1 authority |
+| `test_lane3_candidate_artifact_execution.py` | 3 | Script: digest-verified wheel, `-E -P` isolation, and the bite tests over identity, revision and isolation regressions |
+| `test_lane3_terminal_release.py` | 3 | Launcher snapshot: `id-token: write` for workload identity; the terminal record uploaded under `if: always()`. Script: binding the run to a slot and candidate |
+| `test_lane3_public_surface_guards.py` | 1 | `test_no_new_workflow_reads_lane3_topology_from_repository_variables`: its baseline is lowered to empty in C5 |
+
+Not dependent, although the name matches:
+- `test_lane3_execution_oracle.py` asserts `release-facility.yml` no longer
+  lists runs of `exposure-rehearsal.yml`.
+- `scripts/exposure-rehearsal/` fixture paths, and `exposure_rehearsal_runner`
+  imports.
+
+Also bound to the workflow: the executor-retirement inventory entry (C5) and
+the self-hosted reachability guard, which keeps passing with one fewer
+workflow.
+
+### Ordering against the R holds
+
+- **No conflict with C1–C5:** R1b (`control-runner-diagnostic.yml`), R2, R3
+  and the token half of R5 are held on the VMID 124 decision
+  (`dotmac-runner-transport`'s first adopter, hosting two runners).
+- **C5 removes only the workflow.** Starter's runner service on VMID 124 (R3)
+  and `RUNNER_QUERY_TOKEN` (R5) stay until that decision. Until then, the
+  self-hosted reachability guard is what keeps the personal runner from being
+  reached.
+- **After C5, the personal runner has no Starter workflow left,** which is
+  R3's precondition. The VM is never destroyed, because it hosts
+  Observability's runner too.
+- **Nothing here needs a Foundation `src/` change.** If C2 finds otherwise,
+  that change moves before the Gate-2 freeze (row 1).
