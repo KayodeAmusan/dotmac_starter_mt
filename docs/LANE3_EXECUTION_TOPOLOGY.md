@@ -66,8 +66,8 @@ Measured read-only on 2026-10-05:
   and `probe_identity`. `render_status_document` writes both into
   `deployment-exposure-rehearsal-status.md`. `probe-evidence.json` carries
   observed source addresses. All three are uploaded as artifacts.
-  `collect_probe_evidence.sh` defaults `LANE3_FORMER_PRIVATE_PATHS` to private
-  addresses in tracked source.
+  `collect_probe_evidence.sh` defaulted `LANE3_FORMER_PRIVATE_PATHS` to private
+  addresses in tracked source (removed by R6, 2026-10-06).
 
 Each of these is a refusal reason for § 7's admission, not a style nit.
 
@@ -301,12 +301,12 @@ read-back, not by the change that was meant to cause it.
 
 | Step | Action | Evidence |
 | --- | --- | --- |
-| R1 | D-S2 removes Starter's self-hosted jobs (`exposure-rehearsal.yml`'s `rehearse` job and `control-runner-diagnostic.yml`), and updates `docs/inventories/executor-retirement/dotmac_starter_mt.toml`: the two workflow entries go, and the `ssh_credential` absence text that names `probe-host-ssh-key` is rewritten | Merge SHA. Executor-retirement ratchet green. |
-| R2 | Deregister `control-runner-starter-mt` | Starter runner listing reads zero runners, with a timestamp. |
-| R3 | Destroy the runner VM and its disk, including the controller, observer, jump and probe keys at rest, and retire its Fleet declaration | Hypervisor read-back of absence. Fleet record change. |
+| R1 | **Split, 2026-10-06.** (a) `exposure-rehearsal.yml` is retired only after its rehearse-job steps move into a Starter-owned script that the launcher calls (D-S2c). About 40 Starter guard tests encode its Lane 3 properties (candidate-bytes execution, `-E -P` isolation, authorization before probe, capability preflight). Deleting it first would leave those properties unguarded, because the launcher lives in another repository. (b) `control-runner-diagnostic.yml` is **held**: `packages/dotmac-runner-transport/EXTRACTION.toml` names VMID 124 (the control runner) as that programme's first adopter, and its cutover needs both repository diagnostics. Retiring it needs an owner decision on which plan wins. When R1 lands, it updates the executor inventory and lowers the `vars.LANE3_` ratchet to empty | Merge SHA. Executor-retirement ratchet green. |
+| R2 | Deregister `control-runner-starter-mt`. **Held** with R1(b): same VMID 124 conflict | Starter runner listing reads zero runners, with a timestamp. |
+| R3 | Destroy the runner VM and its disk, including the controller, observer, jump and probe keys at rest, and retire its Fleet declaration. **Held** with R1(b). The Lane 3 static keys can still be removed from the VM and from `authorized_keys` (R4) without destroying the VM | Hypervisor read-back of absence. Fleet record change. |
 | R4 | Remove the static `lane3obs`, jump and probe-host keys from every `authorized_keys` they were installed in | Per-host read-back naming the host. "Unobserved" is recorded as unobserved, never as absent. |
 | R5 | Delete repository variable `LANE3_PROBE_HOST` and secret `RUNNER_QUERY_TOKEN`, and **revoke the underlying token at its issuer**, because deleting a repository secret revokes nothing | Variable and secret listings. Issuer-side revocation read-back. |
-| R6 | Remove the private-address default from `collect_probe_evidence.sh`, and refresh `lane3-acceptance-criteria.md`'s vantage references to the new delivery | Merge SHA. |
+| R6 | **Done (source), 2026-10-06:** the private-address default is removed from `collect_probe_evidence.sh` (the value is now required from the private topology record), and the address ratchet is lowered to empty. Refreshing `lane3-acceptance-criteria.md`'s vantage references follows with the launcher | Merge SHA. |
 
 ## 9. Fail-closed contract for D-S2 and D-S3
 

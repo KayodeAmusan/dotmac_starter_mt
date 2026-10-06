@@ -63,8 +63,12 @@ esac
 SSH_OPTS=(-o BatchMode=yes -o ConnectTimeout=10 -o StrictHostKeyChecking=yes)
 
 # The private paths the retracted NIC used to reach. Probed explicitly, because
-# an unprobed path is not an absent one.
-FORMER_PRIVATE="${LANE3_FORMER_PRIVATE_PATHS:-10.0.0.2 10.0.0.3}"
+# an unprobed path is not an absent one. REQUIRED, with no default: the values
+# are topology, they come from the private topology record
+# (docs/LANE3_EXECUTION_TOPOLOGY.md § 4), and this public file names none. An
+# unset value refuses, because probing nothing would read as "no former path".
+: "${LANE3_FORMER_PRIVATE_PATHS:?unset: the former private paths to probe, from the private topology record}"
+FORMER_PRIVATE="${LANE3_FORMER_PRIVATE_PATHS}"
 
 on_probe() { ssh "${SSH_OPTS[@]}" "${PROBE}" "$@"; }
 

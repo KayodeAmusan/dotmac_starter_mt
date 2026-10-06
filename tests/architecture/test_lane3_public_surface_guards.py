@@ -17,12 +17,13 @@ guard keeps ``main``'s own workflows from being the hole.
 **2. No topology in the tooling.** Execution tooling (``scripts/`` and
 ``.github/workflows/``) carries no IP literal other than loopback, unspecified
 and the documentation ranges (RFC 5737, RFC 3849), and no NEW repository
-variable feeding Lane 3 topology. Both existing exceptions are ratcheted in
-both directions. The lane they belong to is retired by D-S2b (R1, R6), which
-must lower each baseline to empty in the same change. Scope stops at tooling:
-``docs/inventories/`` carries dated measurement records that name real
-addresses, and those are an open disposition decision recorded in the debt
-register. They are not silently covered here.
+variable feeding Lane 3 topology. Exceptions are ratcheted in both directions.
+R6 lowered the address baseline to empty; R1 lowers the `vars.LANE3_` baseline
+when the retiring workflow goes. Scope stops at tooling:
+``docs/inventories/`` carries dated measurement records, whose estate
+addresses were redacted on 2026-10-05 (the role → address map is held
+privately). This guard does not scan docs, so a new address there would not be
+caught here.
 """
 
 from __future__ import annotations
@@ -234,13 +235,10 @@ def _tooling() -> list[pathlib.Path]:
     return files
 
 
-#: The ONLY address literals execution tooling may carry today: the probe's
-#: default "former private paths". Removed by D-S2b (R6), which lowers this to
-#: the empty set in the same change.
-ADDRESS_BASELINE = {
-    ("scripts/exposure-rehearsal/collect_probe_evidence.sh", "10.0.0.2"),
-    ("scripts/exposure-rehearsal/collect_probe_evidence.sh", "10.0.0.3"),
-}
+#: Address literals execution tooling may carry: none. The last exception, the
+#: probe's default "former private paths", was removed by R6 (the value is now
+#: required from the private topology record). Any literal now fails.
+ADDRESS_BASELINE: set[tuple[str, str]] = set()
 
 
 def test_execution_tooling_carries_no_new_topology_literal() -> None:
