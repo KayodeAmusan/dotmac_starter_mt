@@ -400,13 +400,14 @@ publication, privileged attachment or provisioning authority follows from it.
    assignment, and teardown. Terminal `runner_id: 0` alone does not reconstruct
    the historical waiting interval. Identify which evidence is API-verified,
    contemporaneously observed, or reported; do not promote one into another.
-5. The contract owners must record acceptance of this precise residual:
-   source policy is editable in the same repository as workflows. A privileged
-   source change that adds PR-target behavior can invalidate this evidence;
-   this is reliance on reviewed protected source, not a measured event-level
-   scheduler denial. No credential-bearing runtime may rely on a stale source
-   snapshot. A later admission owner must re-read the bound source and controls
-   before privileged attachment; if that revalidation is absent, refuse.
+5. Before accepting the residual, record the independently enforced control
+   chosen below, its owner and live enforcement evidence, or Michael's explicit
+   decision to retain source-only governance. Today main requires zero approvals
+   and the same PR can change trigger, dispatch-only job guard and source policy.
+   Adding a trigger alone still meets the existing dispatch-only guard; the
+   combined change is the escape. Source-policy green is not independent
+   acceptance. Re-read the exact source and controls before privileged attachment
+   and subsequent credential-bearing runs; absent revalidation must refuse.
 
 ### What the reasoning establishes
 
@@ -423,6 +424,72 @@ that event from an admitted main dispatch. The proposal relies on absence of
 an entry point in the full protected source and the dispatch-only job shape.
 It does not prove how GitHub would schedule a newly added malicious default-
 branch PR-target workflow.
+
+### Reduce the source-governance residual before acceptance
+
+**Current read-back (2026-10-06):** `dotmac-tech` plan is `free`.
+Repository ruleset 24557642 is active, with no bypass actors, zero required
+approvals and a required `source-policy` context without an App-source binding.
+This is discovery evidence; settings must be re-read before any enforcement
+claim. No App or external required workflow was installed by this proposal.
+
+A protected main pin does not prove PR-target exclusion or its opposite. The
+unexecuted event-level result remains unknown. The structural proof relies on
+source entry-point absence and the dispatch-only guard, not on the pin alone.
+
+Proposed control options, to be selected and proven before residual acceptance:
+
+- **External App check (candidate for the current public Free topology):**
+  deploy a separately governed checker and bind required context
+  `lane3-source-isolation` to that App's immutable ID through the ruleset's
+  expected-source setting (`integration_id`). An ordinary context name or a
+  reusable workflow called by an editable in-repository workflow is insufficient.
+  The actual App/installation IDs and account-level enforcement availability
+  must be measured, not invented. Keep the existing required source-policy check.
+- **Organization required workflow:** source it from a separately protected
+  policy repository and select an immutable reviewed policy revision where
+  supported. GitHub's required-workflow announcement specifies Enterprise Cloud;
+  ordinary ruleset availability on Free does not establish this feature's
+  availability. Verify the account's actual feature entitlement before choosing
+  or purchasing a plan. The public execution repository needs a compatible
+  public source workflow. The required workflow runs on GitHub-hosted runners,
+  not the protected Lane 3 group.
+- **Independent human review:** require at least one approval by another eligible
+  person, dismiss stale approvals and require approval of the latest push with
+  no bypass. Record who can change the ruleset and policy. This reduces unilateral
+  source changes but remains human governance rather than an external detector.
+
+For either automated option, use independently protected policy code,
+configuration and credentials. The candidate PR cannot change the evaluator or
+its policy revision. Evaluate the complete candidate workflow tree as data;
+never execute/check out PR code for execution, import its parser/policy, run its
+scripts/actions, or expose the App credential to it. Pin trusted parser/runtime
+versions, bound input size and resource use, and fail closed on unsupported YAML,
+unreadable source, symlinks, aliases or indirection. An App needs repository
+contents/metadata/PR read access and checks write access, not target/OpenBao,
+repository administration or workflow write permission. Verify webhook signatures
+and re-fetch immutable source rather than trusting webhook-supplied file contents.
+
+Reject every non-dispatch privileged/group-using workflow and any PR-target
+trigger anywhere in the repository; preserve the exact launcher guard, group,
+Environment and permissions. Bind the result to repository ID, exact candidate
+head/base/merge tree and trusted policy revision; invalidate/rerun on head or base
+change. Only an explicit successful evaluation may report success. A skipped,
+neutral, missing or errored evaluation is not acceptance evidence. The checker
+must not grant a bypass or edit the ruleset that requires it.
+
+Before claiming the control works, demonstrate planted trigger-only and combined
+trigger/guard/policy edits, a same-name status from another App, missing/failed
+checker, stale head/base result and unsupported workflow syntax are blocked from
+merge. Also prove an unchanged safe candidate can pass. Record canonical check
+and ruleset read-backs. These are required future hosted/live checks, not tests
+performed by this documentation change. Administrators who can change the App,
+policy service or ruleset remain an explicitly named trust boundary; separate
+repositories alone do not remove common administration.
+
+Sources: [required status checks and expected App source](https://docs.github.com/en/repositories/configuring-branches-and-merges-in-your-repository/managing-rulesets/available-rules-for-rulesets),
+[required workflow announcement](https://github.blog/enterprise-software/ci-cd/enforcing-code-reliability-by-requiring-workflows-with-github-repository-rules/),
+and [required workflow configuration](https://docs.github.com/en/enterprise-cloud%40latest/repositories/configuring-branches-and-merges-in-your-repository/managing-rulesets/available-rules-for-rulesets).
 
 ### Invalidation, labels and acceptance
 
