@@ -910,7 +910,7 @@ run_step_9_drift() {
   local compose_digest alerts_digest otel_digest
   compose_digest="sha256:$(sha256sum "${WORK_DIR}/rendered/docker-compose.yml" | awk '{print $1}')"
   alerts_digest="sha256:$(sha256sum "${WORK_DIR}/rendered/alerts.rules.yml" | awk '{print $1}')"
-  otel_digest="sha256:$(sha256sum "${WORK_DIR}/rendered/otel-collector.yaml" | awk '{print $1}')"
+  otel_digest="sha256:$(sha256sum "${WORK_DIR}/rendered/otel-collector/config.yaml" | awk '{print $1}')"
 
   cat > "${observed}" <<JSON
 {
@@ -918,7 +918,7 @@ run_step_9_drift() {
   "config_digests": {
     "docker-compose.yml": "${compose_digest}",
     "alerts.rules.yml": "${alerts_digest}",
-    "otel-collector.yaml": "${otel_digest}"
+    "otel-collector/config.yaml": "${otel_digest}"
   },
   "manifest_digest": "${approved_manifest}",
   "approved_image_digest": "${approved_image}"
@@ -945,7 +945,7 @@ JSON
   "config_digests": {
     "docker-compose.yml": "${tampered_digest}",
     "alerts.rules.yml": "${alerts_digest}",
-    "otel-collector.yaml": "${otel_digest}"
+    "otel-collector/config.yaml": "${otel_digest}"
   },
   "manifest_digest": "${approved_manifest}",
   "approved_image_digest": "${approved_image}"

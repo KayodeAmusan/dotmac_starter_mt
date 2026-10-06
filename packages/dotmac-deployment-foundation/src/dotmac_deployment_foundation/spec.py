@@ -1924,6 +1924,12 @@ class DatabaseContract:
         raise SpecError(f"no database role {name!r}")
 
 
+#: The rendered-asset directory holding the collector configuration, and the
+#: host side of its bind mount. Shared by the renderer and the asset registry so
+#: the two cannot disagree about where the file lives.
+COLLECTOR_CONFIG_ASSET_DIRECTORY: Final[str] = "otel-collector"
+
+
 @dataclass(frozen=True, slots=True)
 class Telemetry:
     """What the deployment ships, and where.
@@ -1949,7 +1955,7 @@ class Telemetry:
     Empty means the deployment ships nothing: the configuration is still
     rendered, and it is a specification of what a collector would need rather
     than a collector. Saying that out loud matters, because a rendered
-    `otel-collector.yaml` sitting beside a deployment that does not run a
+    collector configuration sitting beside a deployment that does not run a
     collector reads, to anyone who does not check, as telemetry.
 
     Set it and the collector becomes a Compose service that mounts the rendered
@@ -1958,6 +1964,12 @@ class Telemetry:
     """
 
     collector_config_mount: str = "/etc/otelcol/config.yaml"
+    """The in-container PATH of the collector configuration file.
+
+    Its parent DIRECTORY is what is bind-mounted, never the file itself; see
+    `collector_config_directory`.
+    """
+
     collector_insecure: bool = False
     """Whether the collector's OTLP exporter may use a plaintext connection.
 
@@ -1967,6 +1979,34 @@ class Telemetry:
     generates. A collector config nobody can run is the same shape of problem
     as an alert nobody can fire.
     """
+
+    @property
+    def collector_config_directory(self) -> str:
+        """The in-container directory the rendered configuration is mounted at.
+
+        The collector mounts a DIRECTORY, never a single file. A single-file
+        bind mount pins the inode that existed when the container was
+        created; a deploy that replaces the file (`git pull`, an atomic
+        rename) writes a NEW inode, and the running container keeps reading
+        the old one until it is recreated. That is not hypothetical:
+        `dotmac_erp`'s vmagent kept a two-week-old configuration on production
+        and staging that way, with a literal environment placeholder that
+        merged both deployments' metrics into one series. A directory mount
+        resolves the file name when it is opened, so the pulled file is the
+        one the next (re)start reads.
+        """
+        return str(PurePosixPath(self.collector_config_mount).parent)
+
+    @property
+    def collector_config_asset(self) -> str:
+        """The rendered asset path, inside a directory that holds nothing else.
+
+        A dedicated directory, so mounting it exposes exactly the collector
+        configuration — not the Compose file, the alert rules or the Nginx
+        site rendered beside it.
+        """
+        name = PurePosixPath(self.collector_config_mount).name
+        return f"{COLLECTOR_CONFIG_ASSET_DIRECTORY}/{name}"
 
     @classmethod
     def parse(cls, table: _Table | None, *, where: str) -> Telemetry:
@@ -2012,6 +2052,19 @@ class Telemetry:
             pattern=re.compile(r"^/\S+$"),
         )
         table.done()
+        mount_path = PurePosixPath(collector_config_mount)
+        if (
+            len(mount_path.parts) < 3
+            or ".." in mount_path.parts
+            or ":" in collector_config_mount
+        ):
+            raise SpecError(
+                "collector_config_mount must be a file inside a dedicated "
+                "container directory (e.g. /etc/otelcol/config.yaml): the "
+                "directory is what gets bind-mounted, so a file directly under "
+                "'/' would mount over the container's root",
+                where=where,
+            )
         if app_direct and logs:
             raise SpecError(
                 "app_direct_shipping=true with logs=true would ship every line "

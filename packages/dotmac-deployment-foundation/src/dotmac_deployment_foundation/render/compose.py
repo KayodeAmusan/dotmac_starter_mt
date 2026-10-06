@@ -111,6 +111,7 @@ from .. import ingress
 from ..document import build_canonical_document
 from ..errors import SpecError
 from ..spec import (
+    COLLECTOR_CONFIG_ASSET_DIRECTORY,
     ComposeJob,
     ComposeMount,
     ComposePlacement,
@@ -1169,15 +1170,24 @@ def _collector_service(spec: ProductDeploymentSpec, identity: _Identity) -> list
     on the migration, and the one deployment you most want telemetry from is the
     one where the migration is failing.
 
-    Without this, `otel-collector.yaml` was rendered beside a deployment that
-    ran no collector at all: a specification of what a collector would need,
-    sitting where a reader reasonably takes it for telemetry.
+    Without this, the collector configuration was rendered beside a
+    deployment that ran no collector at all: a specification of what a
+    collector would need, sitting where a reader reasonably takes it for
+    telemetry.
+
+    The configuration is mounted as its DIRECTORY, never as the single file:
+    a single-file bind mount keeps the inode present at container creation,
+    so a deploy that replaces the file leaves the collector reading the old
+    one (see `Telemetry.collector_config_directory`).
     """
     telemetry = spec.telemetry
     if not telemetry.collector_image:
         return []
     body = 2
-    mount = f"./otel-collector.yaml:{telemetry.collector_config_mount}:ro"
+    mount = (
+        f"./{COLLECTOR_CONFIG_ASSET_DIRECTORY}:"
+        f"{telemetry.collector_config_directory}:ro"
+    )
     lines = [
         "  # The collector deliberately does NOT depend on `migrate`: a collector",
         "  # that waits for a migration cannot report on the migration.",

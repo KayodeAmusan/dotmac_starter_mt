@@ -21,7 +21,7 @@ services:
     environment:
       OTEL_EXPORTER_OTLP_ENDPOINT: "${OTEL_EXPORTER_OTLP_ENDPOINT:?OTEL_EXPORTER_OTLP_ENDPOINT must be set}"
     volumes:
-      - "./otel-collector.yaml:/etc/otelcol/config.yaml:ro"
+      - "./otel-collector:/etc/otelcol:ro"
     networks:
       - dotmac_starter_mt_net
     deploy:

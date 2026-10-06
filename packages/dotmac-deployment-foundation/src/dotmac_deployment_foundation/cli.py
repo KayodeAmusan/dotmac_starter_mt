@@ -79,7 +79,9 @@ def _rendered_assets(
     assets: dict[str, str] = {
         "docker-compose.yml": render_compose(spec),
         "alerts.rules.yml": render_alert_rules(spec, thresholds=thresholds),
-        "otel-collector.yaml": render_collector_config(
+        # In its own directory: the collector bind-mounts that directory,
+        # never the single file (see `Telemetry.collector_config_directory`).
+        spec.telemetry.collector_config_asset: render_collector_config(
             spec, deployment_id="render", host="render"
         ),
     }

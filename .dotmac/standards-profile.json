@@ -229,7 +229,7 @@
       "declaration_paths": ["deploy/product.toml"],
       "rendered_paths": [
         "deploy/rendered/docker-compose.yml",
-        "deploy/rendered/otel-collector.yaml",
+        "deploy/rendered/otel-collector/config.yaml",
         "deploy/rendered/alerts.rules.yml"
       ],
       "render_check_workflow": ".github/workflows/deployment-render-check.yml",

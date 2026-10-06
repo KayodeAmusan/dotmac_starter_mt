@@ -528,6 +528,106 @@ def test_the_repositorys_own_descriptor_pins_its_collector_by_digest() -> None:
     assert ":0.109.0" not in own.telemetry.collector_image
 
 
+# ── 4c. the collector configuration is mounted as a DIRECTORY ──────────────
+#
+# A single-file bind mount pins the inode present when the container was
+# created. A deploy that replaces the file (`git pull`, an atomic rename)
+# writes a new inode, and the running container keeps reading the old one;
+# SIGHUP re-reads the same stale inode and only recreating the container picks
+# the change up. `dotmac_erp`'s vmagent kept a two-week-old configuration on
+# production AND staging exactly that way — a literal environment placeholder
+# that merged both deployments' metrics into one series. A directory mount
+# resolves the name at open time. The directory holds ONLY the collector
+# configuration, so the mount exposes nothing else this facility renders.
+
+
+def _own_spec() -> ProductDeploymentSpec:
+    return ProductDeploymentSpec.loads(
+        pathlib.Path("deploy/product.toml").read_text(),
+        source="deploy/product.toml",
+    )
+
+
+def _own_assets(own: ProductDeploymentSpec) -> dict[str, str]:
+    from dotmac_deployment_foundation.cli import _rendered_assets, _thresholds
+
+    return _rendered_assets(own, _thresholds("deploy/alerts/thresholds.json"))
+
+
+def _bind_sources(service: Mapping[str, object]) -> list[tuple[str, str]]:
+    mounts = []
+    for volume in service.get("volumes", []):  # type: ignore[attr-defined]
+        source, target, *_ = str(volume).split(":")
+        if source.startswith("./"):
+            mounts.append((source, target))
+    return mounts
+
+
+def test_the_collector_mounts_its_config_directory_never_the_single_file() -> None:
+    own = _own_spec()
+    doc = yaml.safe_load(render_compose(own, image=_IMAGE))
+    collector = doc["services"]["otel-collector"]
+    assets = _own_assets(own)
+
+    assert _bind_sources(collector) == [("./otel-collector", "/etc/otelcol")]
+    assert collector["command"] == ["--config=/etc/otelcol/config.yaml"]
+    assert own.telemetry.collector_config_asset == "otel-collector/config.yaml"
+    assert own.telemetry.collector_config_asset in assets
+    # The mounted directory holds the collector configuration and nothing else.
+    assert [name for name in assets if name.startswith("otel-collector/")] == [
+        "otel-collector/config.yaml"
+    ]
+
+
+def test_no_rendered_service_bind_mounts_a_rendered_asset_as_a_single_file() -> None:
+    """The general form: every rendered asset reaches a container through its
+    directory. The planted single-file mount is the negative control."""
+    own = _own_spec()
+    assets = set(_own_assets(own))
+    doc = yaml.safe_load(render_compose(own, image=_IMAGE))
+    single_file = [
+        (name, source)
+        for name, service in doc["services"].items()
+        for source, _target in _bind_sources(service)
+        if source.removeprefix("./") in assets
+    ]
+    assert single_file == []
+
+    planted = {"volumes": ["./otel-collector/config.yaml:/etc/otelcol/config.yaml:ro"]}
+    assert [
+        source
+        for source, _target in _bind_sources(planted)
+        if source.removeprefix("./") in assets
+    ] == ["./otel-collector/config.yaml"]
+
+
+def test_a_custom_collector_config_mount_mounts_its_parent_directory() -> None:
+    spec = ProductDeploymentSpec.loads(
+        _telemetry("otel/opentelemetry-collector-contrib@sha256:" + "a" * 64)
+        + 'collector_config_mount = "/etc/otelcol-contrib/otel.yaml"\n',
+        source="<custom-mount>",
+    )
+    doc = yaml.safe_load(render_compose(spec, image=_IMAGE))
+    collector = doc["services"]["otel-collector"]
+
+    assert spec.telemetry.collector_config_asset == "otel-collector/otel.yaml"
+    assert _bind_sources(collector) == [("./otel-collector", "/etc/otelcol-contrib")]
+    assert collector["command"] == ["--config=/etc/otelcol-contrib/otel.yaml"]
+
+
+@pytest.mark.parametrize("mount", ["/config.yaml", "/etc/../config.yaml"])
+def test_a_collector_config_mount_without_a_dedicated_directory_is_refused(
+    mount: str,
+) -> None:
+    """Mounting the parent of `/config.yaml` would mount over `/`."""
+    with pytest.raises(SpecError) as caught:
+        ProductDeploymentSpec.loads(
+            _telemetry(None) + f'collector_config_mount = "{mount}"\n',
+            source="<root-mount>",
+        )
+    assert "collector_config_mount" in str(caught.value)
+
+
 # ── 5. readiness drives the healthcheck; liveness becomes a label ──────────
 
 

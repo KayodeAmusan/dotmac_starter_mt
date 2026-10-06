@@ -2,6 +2,40 @@
 
 ## Unreleased — successor not allocated
 
+### Changed (breaking for re-render): the collector config is mounted as a directory
+
+The rendered `otel-collector` service bind-mounted a SINGLE FILE
+(`./otel-collector.yaml:/etc/otelcol/config.yaml:ro`). A single-file bind
+mount pins the inode present when the container was created. A deploy that
+replaces the file (`git pull`, an atomic rename) writes a new inode, and the
+running container keeps reading the old one. A SIGHUP re-reads the same stale
+inode; only recreating the container picks up the change. `dotmac_erp`'s
+vmagent kept a two-week-old config on production and staging this way. Its
+literal `${DEPLOY_ENV}` label merged both deployments' metrics into the same
+series.
+
+- The collector configuration now renders to `otel-collector/<name>`, a
+  directory holding nothing else. `<name>` is the file name of
+  `collector_config_mount`, so the default is `otel-collector/config.yaml`.
+- The service mounts that directory at the parent of `collector_config_mount`
+  (`./otel-collector:/etc/otelcol:ro` by default). `--config=` is unchanged.
+- `Telemetry.collector_config_directory` and
+  `Telemetry.collector_config_asset` supply both values, so the asset
+  registry and the Compose renderer cannot disagree.
+- `collector_config_mount` must now name a file inside a dedicated directory.
+  `/config.yaml` and `..` paths are refused: mounting the parent of
+  `/config.yaml` would mount over `/`.
+
+**Consumer action on re-render:**
+- Delete the old `deploy/rendered/otel-collector.yaml`.
+  `render --check` reports it as a stray asset.
+- Rename the `otel-collector.yaml` key to `otel-collector/config.yaml` in
+  any drift `config_digests` observation.
+
+A directory mount makes a new config visible to the container. It does not
+make the collector reload it. `ComposeHostEffects.switch` recreates only
+roles, so a config-only change still needs the collector restarted.
+
 ### Added: `RehearsalReceipt.v2`, the Lane 3 receipt the release gate reads
 
 `RehearsalReceipt.v1` cannot carry gate item 9's middle term. `build_receipt`

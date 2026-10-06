@@ -134,7 +134,7 @@ traces = false
 app_direct_shipping = false
 deployment_annotations = true
 # Declaring the image is what turns "we render a collector configuration" into
-# "signals leave this host". Without it the rendered otel-collector.yaml sits
+# "signals leave this host". Without it the rendered otel-collector/config.yaml sits
 # beside a deployment that runs no collector — a specification of what one would
 # need, in a place a reader reasonably takes for telemetry.
 # The INDEX digest of the 0.109.0 manifest list, not a per-architecture
