@@ -350,3 +350,94 @@ them red):
    read the execution repository.
 4. Where the JIT provisioner runs, and its owner.
 5. Certificate and token TTLs, after measurement.
+
+## 12. Proposed amendment — Lane 3 N3 structural exclusion (2026-10-06)
+
+**Status: PROPOSED, NOT ADOPTED.** Michael requested a draft proposing
+structural coverage on 2026-10-06. That request authorizes preparation, not
+acceptance of this substitution. Until the contract owners accept matching
+Starter and CP amendments through reviewed, fully green protected merges,
+the existing live PR-target requirement applies. `admission_evidence` remains
+null. This is a documentation proposal, not an implemented admission check.
+
+### Scope and precise proposed substitution
+
+For Lane 3 repository `dotmac-tech/lane3-exposure-execution` only (repository
+ID 1406738001, owner ID 335992433), permit N3 to be recorded as
+`structural exclusion; live probe not executed` for a reviewed exact source
+revision whose entire workflow set declares no `pull_request_target` trigger.
+Replace only the otherwise required same-repository and fork-origin N3 live
+probe with the complete source/control evidence below. Same-repository and
+fork `pull_request` negatives, non-main/different-file/reusable-call negatives,
+and the protected positive scheduling proof remain live requirements.
+
+This proposal does not apply to `dotmac-tech/gate0-issuer-execution`, does not
+replace any OIDC/credential/audit/disclosure/oracle check, and does not certify
+that a runner group rejects every PR-target event. No Foundation allocation,
+publication, privileged attachment or provisioning authority follows from it.
+
+### Required structural evidence before accepting N3
+
+1. Independently retrieve the live repository ID/owner, default branch `main`,
+   exact full source SHA, and Git tree. Enumerate every workflow file from that
+   tree, archive its content digest and parse its complete trigger/job selection
+   structure. Fail closed on unreadable files, unsupported YAML, aliases or
+   indirection. Every workflow must lack `pull_request_target`, not only the
+   selected launcher. Record the policy implementation/test SHAs too.
+2. Verify the selected launcher has only `workflow_dispatch`; its privileged
+   job checks both event and `refs/heads/main`, uses the exact group and protected
+   Environment, and cannot derive its runner selection or workflow code from
+   PR input. Record the workflow blob digest. No PR-target opt-in or source
+   policy exception is permitted under this substitution.
+3. Live API read-backs must bind the group to that immutable repository ID and
+   exact selected workflow at `@refs/heads/main`, with no alternate repository
+   or workflow entry. Read back the main ruleset's required PR/source-policy
+   check, enforcement and absence of bypass actors; Environment reviewer,
+   main-only branch rule and disabled admin bypass. Show the latest required
+   source-policy checks passed for the exact head/base. A label is insufficient.
+4. Link the live N1/N2/N4b/N5/N6 and P1 evidence, including the contemporaneous
+   queued observation bound with an online idle canary, positive approval and
+   assignment, and teardown. Terminal `runner_id: 0` alone does not reconstruct
+   the historical waiting interval. Identify which evidence is API-verified,
+   contemporaneously observed, or reported; do not promote one into another.
+5. The contract owners must record acceptance of this precise residual:
+   source policy is editable in the same repository as workflows. A privileged
+   source change that adds PR-target behavior can invalidate this evidence;
+   this is reliance on reviewed protected source, not a measured event-level
+   scheduler denial. No credential-bearing runtime may rely on a stale source
+   snapshot. A later admission owner must re-read the bound source and controls
+   before privileged attachment; if that revalidation is absent, refuse.
+
+### What the reasoning establishes
+
+GitHub documents that PR-target workflow code is taken from the base
+repository's default branch. A same-repository or fork PR workflow edit does
+not create a PR-target entry point in an independently inspected default-branch
+workflow tree containing no such trigger. This is the narrow proposed
+exclusion argument. See [GitHub's PR-target security documentation](https://docs.github.com/en/actions/reference/security/securely-using-pull_request_target)
+and the [default-branch semantics change](https://github.blog/changelog/2025-11-07-actions-pull_request_target-and-environment-branch-protections-changes/).
+
+**Do not infer event isolation from `@refs/heads/main`.** PR-target can itself
+resolve to the default branch; a selected ref does not, by itself, distinguish
+that event from an admitted main dispatch. The proposal relies on absence of
+an entry point in the full protected source and the dispatch-only job shape.
+It does not prove how GitHub would schedule a newly added malicious default-
+branch PR-target workflow.
+
+### Invalidation, labels and acceptance
+
+Any change to the default-branch workflow tree, policy implementation/tests,
+repository/default-branch identity, group tuple, ruleset or Environment
+invalidates the structural evidence. Before further credential-bearing runs,
+re-establish every structural condition against the new exact source/control
+snapshot, or perform the live N3 probes under a separately authorized reviewed
+probe procedure. If a PR-target trigger appears anywhere, this substitution
+is unavailable. Missing evidence remains indeterminate and refuses admission.
+
+The accepted record must retain `live N3 not executed`; never label it a live
+pass. Adoption requires CP and Starter contract-owner review plus Michael's
+explicit acceptance of the residual above and corresponding checked-in
+amendments. Source-policy green alone is not that acceptance. The October6
+scheduling record is evidence input, not a completed structural dossier; no
+full workflow-tree digest/revalidation mechanism is supplied by this change.
+All other programme gates remain unchanged.

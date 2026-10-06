@@ -41,7 +41,9 @@ explicitly requires PR-target probes; CP's runner-isolation contract also says
 absence of that trigger is not a substitute for isolation. Complete the required
 same-repository/fork PR-target evidence on an authorized disposable canary, or
 obtain a checked-in contract amendment accepting a precisely defined substitute.
-This record does not supply or accept such an amendment.
+Topology § 12 now proposes a narrowly scoped structural substitution. It is
+not adopted, and this scheduling record does not supply the full structural
+evidence dossier or accept the substitution.
 
 ## Positive scheduling probe
 
