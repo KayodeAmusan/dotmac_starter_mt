@@ -431,7 +431,13 @@ branch PR-target workflow.
 Repository ruleset 24557642 is active, with no bypass actors, zero required
 approvals and a required `source-policy` context without an App-source binding.
 This is discovery evidence; settings must be re-read before any enforcement
-claim. No App or external required workflow was installed by this proposal.
+claim. [Checker implementation draft](https://github.com/dotmac-tech/lane3-source-isolation/pull/1)
+provides an outbound App worker, exact-workflow policy, sensitivity tests and a
+sandboxed service unit. It is not deployed: no App installation, host custody,
+expected-source binding or live enforcement proof exists yet. Its policy is
+stricter than a trigger parser: every workflow change refuses until an external
+reviewed policy repin. No App or external required workflow was installed by
+this proposal.
 
 A protected main pin does not prove PR-target exclusion or its opposite. The
 unexecuted event-level result remains unknown. The structural proof relies on
