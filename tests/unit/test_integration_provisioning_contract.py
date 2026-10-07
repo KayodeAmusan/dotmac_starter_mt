@@ -39,13 +39,14 @@ from dotmac_integration.spi import (
 )
 
 
-def test_spi_1_5_adds_one_closed_provision_mode() -> None:
-    assert CURRENT_SPI_VERSION == SpiVersion(1, 5)
+def test_spi_1_6_preserves_provision_and_adds_one_closed_request_mode() -> None:
+    assert CURRENT_SPI_VERSION == SpiVersion(1, 6)
     assert set(ConnectorMode) == {
         ConnectorMode.INGRESS,
         ConnectorMode.POLL,
         ConnectorMode.DELIVERY,
         ConnectorMode.PROVISION,
+        ConnectorMode.REQUEST,
     }
     contract = MODE_PROTOCOLS[ConnectorMode.PROVISION]
     assert contract.plugin_protocol is ProvisionPlugin

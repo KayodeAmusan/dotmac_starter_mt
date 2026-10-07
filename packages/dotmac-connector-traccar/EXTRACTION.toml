@@ -37,8 +37,7 @@ contract_consumers = []
 candidate_consumers = ["dotmac_integrator", "dotmac_erp"]
 
 inventory_evidence = [
-  "dotmac_erp@d8b0dc71c6cfc5dec3d71852d72bba6cba1728af:docs/integrations/traccar-step1.md",
-  "dotmac_erp@d8b0dc71c6cfc5dec3d71852d72bba6cba1728af:docs/external-connector-surface.md",
+  "docs/inventories/external-connector-sources.md",
 ]
 
 first_cutover = "After the REQUEST SPI and Fleet-owned request/result contracts are published, release this connector, exact-pin it in dotmac_integrator and route ERP Fleet reads through the authenticated Integrator machine surface while ERP remains the only vehicle and tracker-mapping owner."
@@ -52,7 +51,7 @@ next_action = "Keep release disabled until dotmac-integration SPI 1.6 is publish
 [[product_writers]]
 product = "dotmac_erp"
 writer_state = "inventory_only"
-retirement_required = true
+retirement_required = false
 revision = "d8b0dc71c6cfc5dec3d71852d72bba6cba1728af"
 evidence_paths = ["app/services/fleet/tracking/traccar_client.py", "app/services/fleet/tracking/traccar_service.py"]
 
