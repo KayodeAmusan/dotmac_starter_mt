@@ -713,3 +713,28 @@ Platform Control Plane path.
 
 Source comparison and the reasons the archived stateful engine was not reused
 are recorded in `docs/inventories/integration-provisioning-sources.md`.
+
+## Decision amendment — 2026-10-07 (bounded synchronous query contract)
+
+The Integrator SPI gains a fifth closed executable mode, `REQUEST`, at SPI 1.6.
+It serves caller-initiated read-only capabilities whose id selects one typed
+operation. A request cannot carry an arbitrary provider URL, path, method or
+headers. The owning domain's existing `command_schema` validates request input
+and its `observation_schema` validates normalized success output; reusing those
+slots preserves existing capability digests and product-port descriptor v3.
+
+`QueryRequest` carries an opaque Integrator installation id so a process-global
+connector can isolate reusable provider sessions without learning product or
+tenant identity. Config and materialized secrets are immutable and repr-hidden.
+Failures use a closed provider-neutral status set and may not carry a provider
+body, session, credential or partially normalized observation.
+
+General retry/backoff is owned by `dotmac-integration`: two attempts by default,
+five at most, and only `provider_unavailable` or `timeout` are retried. The
+connector owns provider-session recovery and may perform one internal 401/403
+re-authentication-and-replay inside a single module attempt. The invocation is
+synchronous and persistence-free; it creates no startup dependency, queue,
+table, migration, product route or assembly authentication decision.
+
+The qualifying-source and greenfield findings are recorded in
+`docs/inventories/integration-request-sources.md`.

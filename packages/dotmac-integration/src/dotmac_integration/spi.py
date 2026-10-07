@@ -106,6 +106,16 @@ materialized secrets cross only inside repr-hidden immutable request values.
 This is an additive SPI contract, not a durable provisioning engine. The
 Integrator's persistence, leasing, retry and reconciliation owner will bind it
 in a later stateful slice after the next migration revision is allocated.
+
+## SPI 1.6 adds provider-neutral synchronous requests
+
+``REQUEST`` serves caller-initiated reads which return one typed observation.
+The capability id selects the operation; the envelope has no URL, HTTP method,
+path or headers a product could use as an arbitrary provider passthrough.
+Request input is validated against the owning domain's ``command_schema`` and a
+successful observation against its ``observation_schema`` by the invocation
+boundary. An opaque installation id gives a process-global connector a stable
+session-isolation key without exposing product, tenant or provider identity.
 """
 
 from __future__ import annotations
@@ -119,6 +129,7 @@ from dataclasses import dataclass, field
 from enum import Enum
 from types import MappingProxyType
 from typing import Final, Protocol, runtime_checkable
+from uuid import UUID
 
 from jsonschema import Draft202012Validator
 from jsonschema.exceptions import SchemaError
@@ -159,6 +170,12 @@ __all__ = [
     "ProvisionStep",
     "ProvisioningHandler",
     "ProvisioningResult",
+    "QueryContractError",
+    "QueryRequest",
+    "QueryResult",
+    "QueryStatus",
+    "RequestHandler",
+    "RequestPlugin",
     "SecretBindingDeclaration",
     "SpiIncompatibleError",
     "SpiRange",
@@ -244,6 +261,10 @@ class ProvisionContractError(ValueError):
     """A provisioning request or result violates the provider-neutral SPI."""
 
 
+class QueryContractError(ValueError):
+    """A synchronous query request or result violates the neutral SPI."""
+
+
 _KEY_RE: Final[re.Pattern[str]] = re.compile(r"^[a-z][a-z0-9_]{1,118}$")
 _DIAGNOSTIC_CODE_RE: Final[re.Pattern[str]] = re.compile(r"^[a-z][a-z0-9_]{0,63}$")
 #: `domain.noun.vN` — e.g. `ticket.observation.v1`. A capability id is a
@@ -254,12 +275,16 @@ _CAPABILITY_RE: Final[re.Pattern[str]] = re.compile(
     r"^[a-z][a-z0-9_]*(\.[a-z][a-z0-9_]*)+\.v[1-9][0-9]*$"
 )
 _SECRET_BINDING_RE: Final[re.Pattern[str]] = re.compile(r"^[a-z][a-z0-9_]{0,79}$")
-#: Exact, lower-case DNS hostnames only. No URL, path, wildcard, IP literal or
+#: Exact, lower-case DNS hostnames only, including one-label private service
+#: discovery names such as ``traccar``. No URL, path, wildcard, IP literal or
 #: trailing root dot: each of those broadens what an allowlist entry means.
 _EGRESS_HOST_RE: Final[re.Pattern[str]] = re.compile(
     r"(?=.{1,253}\Z)"
+    r"(?:"
     r"(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+"
     r"[a-z](?:[a-z0-9-]{0,61}[a-z0-9])?"
+    r"|[a-z](?:[a-z0-9-]{0,61}[a-z0-9])?"
+    r")"
 )
 #: `type/subtype`, optionally with a charset. Anchored and character-restricted
 #: because this string is written into a RESPONSE HEADER: an unvalidated one
@@ -322,7 +347,7 @@ class SpiVersion:
 # in order to protect a compatibility promise nothing ever consumed. SPI 1.2
 # then added verification evidence without changing the handler protocols. SPI
 # 1.3 adds deployment declarations while keeping every handler protocol intact.
-CURRENT_SPI_VERSION: Final[SpiVersion] = SpiVersion(1, 5)
+CURRENT_SPI_VERSION: Final[SpiVersion] = SpiVersion(1, 6)
 
 
 @dataclass(frozen=True, slots=True)
@@ -379,6 +404,7 @@ class ConnectorMode(str, Enum):
     POLL = "poll"
     DELIVERY = "delivery"
     PROVISION = "provision"
+    REQUEST = "request"
 
 
 @dataclass(frozen=True, slots=True)
@@ -485,7 +511,7 @@ class EgressDeclaration:
     def __post_init__(self) -> None:
         seen: set[str] = set()
         for host in self.hosts:
-            if not _EGRESS_HOST_RE.fullmatch(host):
+            if host == "localhost" or not _EGRESS_HOST_RE.fullmatch(host):
                 raise InvalidManifestError(
                     f"egress host {host!r} must be an exact lower-case DNS hostname"
                 )
@@ -963,6 +989,111 @@ class ProvisioningResult:
         _freeze_provision_material(self, "evidence")
 
 
+def _freeze_query_value(value: object) -> object:
+    """Detach and deeply freeze finite JSON without provider interpretation."""
+
+    if isinstance(value, Mapping):
+        if any(type(key) is not str for key in value):
+            raise QueryContractError("query mappings require string keys")
+        return MappingProxyType(
+            {key: _freeze_query_value(item) for key, item in value.items()}
+        )
+    if isinstance(value, list | tuple):
+        return tuple(_freeze_query_value(item) for item in value)
+    if type(value) is float and not math.isfinite(value):
+        raise QueryContractError("query values must be finite JSON")
+    if type(value) in (str, int, float, bool, type(None)):
+        return value
+    raise QueryContractError("query values must be finite JSON")
+
+
+def _freeze_query_mapping(
+    value: Mapping[str, object], *, field_name: str
+) -> Mapping[str, object]:
+    if not isinstance(value, Mapping):
+        raise QueryContractError(f"query {field_name} requires a mapping")
+    frozen = _freeze_query_value(value)
+    if not isinstance(frozen, Mapping):  # pragma: no cover - narrowed above
+        raise QueryContractError(f"query {field_name} requires a mapping")
+    return frozen
+
+
+def _plain_query_value(value: object) -> object:
+    """Restore ordinary JSON containers for schema validation."""
+
+    if isinstance(value, Mapping):
+        return {key: _plain_query_value(item) for key, item in value.items()}
+    if isinstance(value, tuple):
+        return [_plain_query_value(item) for item in value]
+    return value
+
+
+class QueryStatus(str, Enum):
+    """Closed provider-neutral outcomes for one synchronous read."""
+
+    SUCCEEDED = "succeeded"
+    PROVIDER_UNAVAILABLE = "provider_unavailable"
+    UNAUTHORIZED_PROVIDER_SESSION = "unauthorized_provider_session"
+    NOT_FOUND = "not_found"
+    INVALID_QUERY = "invalid_query"
+    TIMEOUT = "timeout"
+    MALFORMED_PROVIDER_RESPONSE = "malformed_provider_response"
+
+
+@dataclass(frozen=True, slots=True, repr=False)
+class QueryRequest:
+    """One typed read with no arbitrary provider transport surface.
+
+    ``installation_id`` is an opaque Integrator-owned connection key. A plugin
+    may use it to isolate reusable provider sessions; it conveys no tenant,
+    product or provider identity and is never supplied by a product caller.
+    """
+
+    installation_id: UUID
+    capability_id: str
+    payload: Mapping[str, object]
+    config: Mapping[str, object]
+    secrets: Mapping[str, object]
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.installation_id, UUID):
+            raise QueryContractError("query installation_id requires a UUID")
+        if not _CAPABILITY_RE.fullmatch(self.capability_id):
+            raise QueryContractError("query capability_id is malformed")
+        for name in ("payload", "config", "secrets"):
+            object.__setattr__(
+                self,
+                name,
+                _freeze_query_mapping(getattr(self, name), field_name=name),
+            )
+
+
+@dataclass(frozen=True, slots=True, repr=False)
+class QueryResult:
+    """A normalized observation or one closed failure, never a raw response."""
+
+    status: QueryStatus
+    observation: Mapping[str, object] | None = None
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.status, QueryStatus):
+            raise QueryContractError("query result status is not declared")
+        if self.status is QueryStatus.SUCCEEDED:
+            if self.observation is None:
+                raise QueryContractError(
+                    "successful query requires a normalized observation"
+                )
+            object.__setattr__(
+                self,
+                "observation",
+                _freeze_query_mapping(self.observation, field_name="observation"),
+            )
+        elif self.observation is not None:
+            raise QueryContractError(
+                "a failure result cannot carry a provider or observation body"
+            )
+
+
 class InboundDisposition(str, Enum):
     """Whether a verified provider fact is eligible for product delivery.
 
@@ -1274,6 +1405,13 @@ class ProvisioningHandler(Protocol):
 
 
 @runtime_checkable
+class RequestHandler(Protocol):
+    """MODE: REQUEST — one synchronous typed observation."""
+
+    def query(self, request: QueryRequest) -> QueryResult: ...
+
+
+@runtime_checkable
 class ConnectorPlugin(Protocol):
     """The BASE contract: identity, metadata, and connection validation.
 
@@ -1342,6 +1480,13 @@ class ProvisionPlugin(ConnectorPlugin, Protocol):
     def provisioning_handler_for(self, capability_id: str) -> ProvisioningHandler: ...
 
 
+@runtime_checkable
+class RequestPlugin(ConnectorPlugin, Protocol):
+    """MODE: REQUEST. Serves caller-initiated provider-neutral reads."""
+
+    def request_handler_for(self, capability_id: str) -> RequestHandler: ...
+
+
 @dataclass(frozen=True, slots=True)
 class ModeContract:
     """What a declared mode obliges a plugin to provide.
@@ -1389,6 +1534,11 @@ MODE_PROTOCOLS: Final[Mapping[ConnectorMode, ModeContract]] = MappingProxyType(
             plugin_protocol=ProvisionPlugin,
             factory="provisioning_handler_for",
             handler_protocol=ProvisioningHandler,
+        ),
+        ConnectorMode.REQUEST: ModeContract(
+            plugin_protocol=RequestPlugin,
+            factory="request_handler_for",
+            handler_protocol=RequestHandler,
         ),
     }
 )

@@ -1771,6 +1771,7 @@
           "dotmac_integration/py.typed",
           "dotmac_integration/manifest.py",
           "dotmac_integration/spi.py",
+          "dotmac_integration/query_contract.py",
           "dotmac_integration/ingress.py",
           "dotmac_integration/polling.py",
           "dotmac_integration/discovery.py",

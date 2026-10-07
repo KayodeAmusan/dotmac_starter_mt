@@ -65,6 +65,31 @@ def test_policy_is_the_deterministic_union_of_installed_manifests() -> None:
     )
 
 
+def test_private_single_label_dns_name_is_an_exact_egress_destination() -> None:
+    manifest = _manifest("traccar_connector", hosts=("traccar",))
+    policy = derive_runtime_policy(
+        ConnectorRegistry((fake_plugin(manifest_=manifest),))
+    )
+    assert policy.egress_hosts == ("traccar",)
+
+
+@pytest.mark.parametrize(
+    "host",
+    [
+        "Traccar",
+        "-traccar",
+        "traccar-",
+        "*.traccar",
+        "http://traccar",
+        "traccar.",
+        "127.0.0.1",
+    ],
+)
+def test_single_label_egress_does_not_open_non_dns_surfaces(host: str) -> None:
+    with pytest.raises(ValueError, match="exact lower-case DNS hostname"):
+        EgressDeclaration(hosts=(host,))
+
+
 def test_a_legacy_manifest_cannot_be_projected_into_runtime_policy() -> None:
     legacy = ConnectorManifest(
         connector_key="legacy_connector",

@@ -257,6 +257,7 @@ dotmac-connector-mono = { path = "packages/dotmac-connector-mono", develop = tru
 dotmac-connector-remita = { path = "packages/dotmac-connector-remita", develop = true }
 dotmac-connector-nira = { path = "packages/dotmac-connector-nira", develop = true }
 dotmac-connector-sub-accounting = { path = "packages/dotmac-connector-sub-accounting", develop = true }
+dotmac-connector-traccar = { path = "packages/dotmac-connector-traccar", develop = true }
 dotmac-app-sync = { path = "packages/dotmac-app-sync", develop = true }
 
 [tool.ruff]

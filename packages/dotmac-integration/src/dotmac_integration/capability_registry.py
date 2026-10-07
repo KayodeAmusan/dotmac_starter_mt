@@ -422,11 +422,15 @@ class CapabilityContract:
     capability_id: str
     owner: CapabilityOwner
     summary: str
-    #: What a product may SEND for a DELIVERY capability.
+    #: What a product may SEND for a DELIVERY capability, or supply as the
+    #: bounded input to a caller-initiated REQUEST capability. The stored name
+    #: remains stable so adding REQUEST does not redefine published digests or
+    #: product-port descriptor documents.
     command_schema: dict[str, object] | None = None
     #: The NORMALIZED outcome body a connector may return (`Outcome.result`).
     result_schema: dict[str, object] | None = None
-    #: The typed observation an INGRESS or POLL capability yields.
+    #: The typed observation an INGRESS or POLL capability yields, or the
+    #: normalized synchronous observation a REQUEST returns.
     observation_schema: dict[str, object] | None = None
     #: Set once this version is superseded. Never a way to change it in place.
     deprecation: ContractDeprecation | None = None
@@ -534,6 +538,17 @@ class CapabilityContract:
     def require_command(self, payload: object, *, now: date | None = None) -> None:
         """ADR-0024 § 10.4.1 — called before a delivery row exists."""
         self._require("command", self.command_schema, payload, now=now)
+
+    def require_request(self, payload: object, *, now: date | None = None) -> None:
+        """Validate caller-initiated read input before connector I/O.
+
+        REQUEST reuses the published ``command_schema`` slot deliberately. It
+        is the domain-owned caller-to-connector payload in both modes; adding a
+        fourth schema field would change every existing contract digest and the
+        exact product-port descriptor v3 wire shape without adding meaning.
+        """
+
+        self._require("request", self.command_schema, payload, now=now)
 
     def require_result(self, body: object, *, now: date | None = None) -> None:
         """ADR-0024 § 10.4.3 — called before the claim-guarded settle UPDATE."""

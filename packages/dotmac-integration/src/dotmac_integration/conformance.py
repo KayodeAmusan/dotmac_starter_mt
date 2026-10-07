@@ -66,6 +66,10 @@ from dotmac_integration.spi import (
     ProvisionPlanRequest,
     ProvisionPlanResult,
     ProvisionResultStatus,
+    QueryRequest,
+    QueryResult,
+    QueryStatus,
+    RequestHandler,
     SpiRange,
     verify_plugin_modes,
 )
@@ -318,6 +322,16 @@ class FakePlugin:
     provision_raises: BaseException | None = None
     provision_contract_broken: bool = False
 
+    # ── request ────────────────────────────────────────────────────────────
+    query_requests_seen: list[QueryRequest] = field(default_factory=list)
+    query_result: QueryResult = field(
+        default_factory=lambda: QueryResult(
+            status=QueryStatus.SUCCEEDED, observation={}
+        )
+    )
+    query_raises: BaseException | None = None
+    query_factory_raises: BaseException | None = None
+
     # ── wrong-shape knobs: the sensitivity proofs for the handler check ──────
     #: Hand back the INGRESS handler from the DELIVERY factory. Not callable, so
     #: it is precisely "the wrong callable" the shape check exists to catch, and
@@ -331,6 +345,7 @@ class FakePlugin:
     #: The same for POLL.
     poll_handler_wrong_shape: bool = False
     provision_handler_wrong_shape: bool = False
+    request_handler_wrong_shape: bool = False
 
     @property
     def manifest(self) -> ConnectorManifest:
@@ -441,6 +456,25 @@ class FakePlugin:
                 return fake.provisioning_result
 
         return _Provisioning()
+
+    def request_handler_for(self, capability_id: str) -> RequestHandler:
+        """A synchronous handler with no provider, persistence, or retry loop."""
+
+        self.manifest_.require_declares(capability_id)
+        if self.query_factory_raises is not None:
+            raise self.query_factory_raises
+        if self.request_handler_wrong_shape:
+            return lambda request: None  # type: ignore[return-value]
+        fake = self
+
+        class _Request:
+            def query(self, request: QueryRequest) -> QueryResult:
+                fake.query_requests_seen.append(request)
+                if fake.query_raises is not None:
+                    raise fake.query_raises
+                return fake.query_result
+
+        return _Request()
 
     def _ingress_handler(self) -> IngressHandler:
         fake = self

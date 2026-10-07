@@ -105,6 +105,25 @@ version number with a17's published contract. That work has now landed:
   claim, and no `a18` persistence migration. The durable runtime that makes
   these calls survivable is a separate, later change.
 
+- Adds **SPI 1.6**: a fifth closed `ConnectorMode`, `REQUEST`, with immutable,
+  repr-hidden `QueryRequest`/`QueryResult` values and one `RequestHandler`.
+- Reuses the domain-owned `command_schema` for bounded request input and
+  `observation_schema` for normalized output, preserving all existing contract
+  digests and product-port descriptor v3 documents.
+- Adds a persistence-free invocation boundary with a module-owned immutable
+  retry policy: two attempts by default, five maximum, exponential capped
+  backoff, and retries only for `provider_unavailable` or `timeout`.
+- Adds `prepare_query`/`PreparedQuery`, reusing enabled binding/installation,
+  manifest pin, capability digest/mode and runtime/quarantine admission checks.
+  Invalid input is refused before the assembly materializes secret references.
+- Gives a process-global connector a stable opaque installation key for session
+  isolation. Provider credentials/config remain repr-hidden connector material;
+  products receive neither. One 401/403 re-authentication replay remains inside
+  a connector attempt and an exhausted unauthorized session is not retried.
+- Accepts strict lower-case single-label DNS egress destinations such as a
+  private Compose service alias, while continuing to reject URLs, paths,
+  wildcards, IP literals, the reserved `localhost` name and trailing root dots.
+
 Still unreleased. See `docs/inventories/declared-publication-baseline.json`
 for the recorded declared-unpublished state.
 

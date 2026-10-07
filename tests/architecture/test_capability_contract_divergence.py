@@ -42,6 +42,7 @@ CONNECTOR_PACKAGES: Final[tuple[str, ...]] = (
     "dotmac_connector_mono",
     "dotmac_connector_paystack",
     "dotmac_connector_remita",
+    "dotmac_connector_traccar",
     "dotmac_connector_whatsapp",
 )
 

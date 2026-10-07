@@ -57,7 +57,7 @@ def test_secret_binding_names_are_closed_and_unique() -> None:
         SecretBindingDeclaration(name="Webhook Token")
 
     duplicate = SecretBindingDeclaration(name="webhook_token")
-    with pytest.raises(InvalidManifestError, match="secret binding.*twice"):
+    with pytest.raises(InvalidManifestError, match=r"secret binding.*twice"):
         _current_manifest(secret_bindings=(duplicate, duplicate))
 
 
@@ -70,6 +70,10 @@ def test_secret_binding_names_are_closed_and_unique() -> None:
         "PROVIDER.EXAMPLE",
         "127.0.0.1",
         "localhost",
+        "-traccar",
+        "traccar-",
+        "trac_car",
+        "traccar..internal",
         "provider.example.",
     ],
 )
@@ -78,8 +82,13 @@ def test_egress_hosts_are_exact_external_dns_names(host: str) -> None:
         EgressDeclaration(hosts=(host,))
 
 
+def test_private_single_label_service_name_is_an_exact_dns_host() -> None:
+    declaration = EgressDeclaration(hosts=("traccar",))
+    assert declaration.hosts == ("traccar",)
+
+
 def test_egress_hosts_are_unique() -> None:
-    with pytest.raises(InvalidManifestError, match="egress host.*twice"):
+    with pytest.raises(InvalidManifestError, match=r"egress host.*twice"):
         EgressDeclaration(hosts=("api.provider.example", "api.provider.example"))
 
 

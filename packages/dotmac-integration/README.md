@@ -40,7 +40,8 @@ wire the assembly must render. The module persists and revalidates both without
 authoring either contract.
 
 **Declared, unpublished `0.1.0a18`:** its source adds additive SPI 1.5's
-provider-neutral plan/apply/observe/cancel contract. It adds no
+provider-neutral plan/apply/observe/cancel contract and SPI 1.6's bounded,
+provider-neutral synchronous REQUEST contract. It adds no
 persistence, migration or assembly wiring. `0.1.0a17` remains the latest
 release; no consumer may exact-pin a18 until the protected release tags it.
 
@@ -72,6 +73,7 @@ protocol per mode it declares:
 | `INGRESS` | `IngressPlugin` | `ingress_handler_for` | `IngressHandler` |
 | `POLL` | `PollPlugin` | `poll_handler_for` | `PollHandler` |
 | `PROVISION` | `ProvisionPlugin` | `provisioning_handler_for` | `ProvisioningHandler` |
+| `REQUEST` | `RequestPlugin` | `request_handler_for` | `RequestHandler` |
 
 A declared mode is a promise the module verifies at discovery, in both
 directions and including the shape of the handler that comes back. A mode
@@ -82,6 +84,16 @@ For `PROVISION`, the owning product supplies an ordered plan and its canonical
 hash. The connector may validate and execute that plan but the Integrator
 refuses any returned plan that inserts, removes, reorders or rewrites a step.
 The current slice deliberately stops at that call boundary.
+
+For `REQUEST`, a domain-owned capability id selects one operation. Its existing
+`command_schema` bounds input and `observation_schema` bounds normalized output;
+there is no raw URL, path, method or header passthrough. The module performs at
+most two attempts by default, retries only `provider_unavailable` and `timeout`,
+and caps configurable attempts at five. A connector may perform one internal
+401/403 re-authentication-and-replay inside one module attempt. `prepare_query`
+pins an enabled binding, installation, compatible manifest and immutable config
+revision under the shared runtime/quarantine admission authority; only after the
+database session closes does `execute_prepared_query` materialize secret refs.
 
 Ingress connectors receive one immutable `IngressRequest` — the raw bytes, the
 headers and the query params, preserved exactly and handed to all three hooks as

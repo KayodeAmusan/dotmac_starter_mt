@@ -918,6 +918,24 @@ type = "directory"
 url = "packages/dotmac-connector-sub-accounting"
 
 [[package]]
+name = "dotmac-connector-traccar"
+version = "0.1.0a1"
+description = "Dotmac Integrator request connector for Traccar fleet telemetry"
+optional = false
+python-versions = ">=3.11,<3.14"
+groups = ["dev"]
+files = []
+develop = true
+
+[package.dependencies]
+dotmac-integration = ">=0.1.0a18"
+httpx = ">=0.27,<1.0"
+
+[package.source]
+type = "directory"
+url = "packages/dotmac-connector-traccar"
+
+[[package]]
 name = "dotmac-connector-whatsapp"
 version = "0.1.0a4"
 description = "Meta WhatsApp Cloud API ingress and delivery connector for Dotmac Integrator"
@@ -4393,4 +4411,4 @@ files = [
 [metadata]
 lock-version = "2.1"
 python-versions = ">=3.12,<3.14"
-content-hash = "112c2251494efa6ec669f3ef1dae1916183f69bd2f43d183bec580f908b68e55"
+content-hash = "3c247eb4835121dfb777357c8a37cc1506a69fdb2235292067f64617b490fb14"

@@ -235,7 +235,6 @@ binding_multiplicity = "Unique on (installation_id, capability_id). Many install
 # coordinated connector release wave. See ADR-0061 § 5 and its Amendment A2/A3
 # for the ordered sequence.
 open_questions = [
-  "ConnectorMode is a CLOSED union of INGRESS|POLL|DELIVERY with no REQUEST member, so a caller-initiated read that returns a typed observation (social.profile.read.v1) cannot be served at all (ADR-0024 § 11.3).",
   "DELIVERY has no durable command-response seam: dispatch returns an Outcome carrying only status, error code, provider reference and HTTP status, so a command whose reply is CONTENT rather than evidence has nowhere to land. dotmac-connector-paystack states the consequence exactly - a checkout URL, a resolved bank-account name and a new transfer-recipient code cannot be persisted, and only commands whose reply is pure evidence (charge, refund, transfer) are usable through DELIVERY at all. This blocks any payment-execution owner from completing its own lifecycle through the sanctioned transport, because binding a payee (resolve_bank_account, create_transfer_recipient) is a content reply. A seam must preserve the reply against the same idempotency key without letting a plugin smuggle a response body through untyped evidence - the boundary Outcome.provider_reference and provider_status_code were deliberately typed to hold (docs/inventories/treasury-payment-execution-sources.md § 4, § 12.3 G1).",
 ]
 

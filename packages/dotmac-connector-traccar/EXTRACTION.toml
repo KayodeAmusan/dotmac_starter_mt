@@ -1,0 +1,64 @@
+schema_version = 1
+package = "dotmac-connector-traccar"
+classification = "stateless-protocol-adapter"
+status = "audit-complete"
+source_mode = "greenfield-after-inventory"
+
+owner = "Traccar 6.15.3 HTTP transport, service-session authentication, strict provider response parsing and provider-neutral Fleet tracking read normalization."
+
+contract = "Implement dotmac-integration REQUEST SPI >=1.6,<2.0 for connector key traccar. Serve provider health, exact device lookup, latest position and bounded position history through four fixed read-only capabilities. Permit only http://traccar:8082, isolate ephemeral provider cookies by opaque Integrator installation_id, perform at most one 401/403 re-authentication and replay, and expose no arbitrary method, URL, query, provider body, cookie or secret. Own no vehicle, tracker assignment, tenant or organization, Fleet permission, retry engine, checkpoint, telemetry persistence, product database or business workflow. Release stays disabled until dotmac-integration a18 is published and the four ERP/provider-owner schemas exist; add their exact claims_contract_digest values before publication."
+
+# ERP's accepted Step 1 built a deliberately dormant transport-injected client,
+# mapping owner and tests. It made no provider call and defined no device or
+# position normalization to port. No qualifying Traccar connector existed in
+# the measured Starter or Sub sources, so this adapter is greenfield after the
+# inventory rather than a second implementation beside a live one.
+source_repositories = ["dotmac_starter_mt", "dotmac_erp", "dotmac_sub"]
+
+source_revisions = [
+  "dotmac_starter_mt:b0cc1c872d506ef4adf6786ef5335d0784b19825",
+  "dotmac_erp:d8b0dc71c6cfc5dec3d71852d72bba6cba1728af",
+  "dotmac_sub:457882482cc938bfe70f48ca2fb282dab98beee6",
+]
+
+source_paths = [
+  "dotmac_erp@d8b0dc71c6cfc5dec3d71852d72bba6cba1728af:app/services/fleet/tracking/traccar_client.py",
+  "dotmac_erp@d8b0dc71c6cfc5dec3d71852d72bba6cba1728af:app/services/fleet/tracking/traccar_service.py",
+  "dotmac_erp@d8b0dc71c6cfc5dec3d71852d72bba6cba1728af:tests/services/test_traccar_client.py",
+  "dotmac_erp@d8b0dc71c6cfc5dec3d71852d72bba6cba1728af:docs/integrations/traccar-step1.md",
+]
+
+preserved_tests = [
+  "dotmac_starter_mt:tests/unit/test_traccar_connector.py",
+  "dotmac_starter_mt:tests/architecture/test_traccar_connector_boundary.py",
+]
+
+contract_consumers = []
+candidate_consumers = ["dotmac_integrator", "dotmac_erp"]
+
+inventory_evidence = [
+  "dotmac_erp@d8b0dc71c6cfc5dec3d71852d72bba6cba1728af:docs/integrations/traccar-step1.md",
+  "dotmac_erp@d8b0dc71c6cfc5dec3d71852d72bba6cba1728af:docs/external-connector-surface.md",
+]
+
+first_cutover = "After the REQUEST SPI and Fleet-owned request/result contracts are published, release this connector, exact-pin it in dotmac_integrator and route ERP Fleet reads through the authenticated Integrator machine surface while ERP remains the only vehicle and tracker-mapping owner."
+
+shadow_and_drift = "With no physical tracker required, compare fixed Traccar 6.15.3 device and position fixtures against the normalized contract. During a later zero-device production check, prove authenticated health and an empty exact lookup without registering a device or changing provider state."
+
+local_copy_retirement = "Delete ERP's dormant direct Traccar credential, base-URL and Basic-auth assumptions when ERP adopts the published Integrator request contract. ERP retains VehicleTracker, organization scoping, Fleet RBAC and user-facing behavior."
+
+next_action = "Keep release disabled until dotmac-integration SPI 1.6 is published, the Fleet-owned capability schemas and digests exist, connector conformance is green in Git-hosted CI, and dotmac_integrator can exact-pin the released wheel."
+
+[[product_writers]]
+product = "dotmac_erp"
+writer_state = "inventory_only"
+retirement_required = true
+revision = "d8b0dc71c6cfc5dec3d71852d72bba6cba1728af"
+evidence_paths = ["app/services/fleet/tracking/traccar_client.py", "app/services/fleet/tracking/traccar_service.py"]
+
+[[product_writers]]
+product = "dotmac_sub"
+writer_state = "inventory_only"
+retirement_required = false
+revision = "457882482cc938bfe70f48ca2fb282dab98beee6"
+evidence_paths = ["pyproject.toml", "docs/SOT_RELATIONSHIP_MAP.md"]

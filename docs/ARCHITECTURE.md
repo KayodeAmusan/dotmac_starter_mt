@@ -204,11 +204,10 @@ with a discriminated text/template/media content shape, replacing both
 vocabularies at once), `social.comment.reply.v1` (public Facebook/Instagram
 comment consequences — a different business act) and `social.profile.read.v1`
 (caller-initiated profile observation through a REQUEST mode). Sub migrates to
-them; v1 is kept for a bounded compatibility window and then retired. As built,
-none of the three exists, and `spi.ConnectorMode` is still the closed union
-`INGRESS | POLL | DELIVERY` with no REQUEST member — which is the same gap
-`dotmac-connector-meta-social`'s dossier records for its withheld contact
-profile lookup.
+them; v1 is kept for a bounded compatibility window and then retired. The
+declared, unpublished `dotmac-integration` a18 source now supplies SPI 1.6's
+provider-neutral REQUEST machinery; the three named capability contracts and
+their connector/product cutovers still do not exist.
 
 Consequence, stated plainly: **payout traffic cannot be switched between
 providers by changing a binding today.** `payments.payout.v1` has exactly one
