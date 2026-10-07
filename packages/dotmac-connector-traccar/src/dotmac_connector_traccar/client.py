@@ -59,6 +59,10 @@ def parse_config(value: Mapping[str, object]) -> TraccarConfig:
             or not 0.1 <= float(timeout) <= 60.0
         ):
             raise TraccarFailure(QueryStatus.INVALID_QUERY)
+    if not isinstance(connect, int | float) or isinstance(connect, bool):
+        raise TraccarFailure(QueryStatus.INVALID_QUERY)
+    if not isinstance(read, int | float) or isinstance(read, bool):
+        raise TraccarFailure(QueryStatus.INVALID_QUERY)
     return TraccarConfig(base_url, float(connect), float(read))
 
 

@@ -60,7 +60,8 @@ def _number(
 
 def _timestamp(value: object, *, label: str) -> str:
     text = _text(value, label=label)
-    assert text is not None
+    if text is None:
+        raise TraccarMalformedResponse(f"{label} is invalid")
     try:
         parsed = datetime.fromisoformat(text.replace("Z", "+00:00"))
     except ValueError:

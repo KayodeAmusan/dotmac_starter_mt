@@ -97,9 +97,11 @@ class QueryExecutionPolicy:
     def retry_delay_seconds(self, attempts_made: int) -> float:
         """Exponential delay after ``attempts_made``, capped by policy."""
 
-        return min(
-            self.max_backoff_seconds,
-            self.base_backoff_seconds * (2 ** max(attempts_made - 1, 0)),
+        return float(
+            min(
+                self.max_backoff_seconds,
+                self.base_backoff_seconds * (2 ** max(attempts_made - 1, 0)),
+            )
         )
 
 
